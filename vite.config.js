@@ -11,7 +11,7 @@ export default defineConfig({
     // Inline small assets so Capacitor doesn't need to configure
     // extra CORS / file-access rules for tiny images/fonts.
     assetsInlineLimit: 8192,
-    target: ["es2020", "chrome80", "safari13"],
+    target: "es2022",
     rollupOptions: {
       output: {
         manualChunks: {
