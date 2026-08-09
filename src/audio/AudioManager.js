@@ -1,7 +1,15 @@
-// AudioManager.js — Web Audio API synthesis, no mp3/wav files needed.
-// MOBILE FIX: speechSynthesis is fully guarded — never accessed unless confirmed present.
-// MOBILE FIX: AudioContext created lazily on first user gesture only.
-// MOBILE FIX: visibilitychange handler guards all API calls.
+// AudioManager.js — Web Audio API synthesis + Speech Synthesis for winner announcements.
+//
+// KEY FIX for winner announcer on Android:
+//   • Never rely on speechSynthesis.getVoices() — it returns [] until the
+//     voiceschanged event fires, which may be AFTER speak() is called.
+//     Instead we just set utt.lang = 'en-US' and let the OS pick the voice.
+//     This is the correct approach for Android WebView / Capacitor.
+//   • No setTimeout delay — the delay was causing speak() to fire after the
+//     next round had already started, making it feel broken.
+//   • speechSynthesis.cancel() before speak() is enough to clear the queue.
+//   • All speechSynthesis access guarded by this._hasSpeech check.
+//   • AudioContext created lazily on first user gesture only.
 
 export default class AudioManager {
 
@@ -15,31 +23,18 @@ export default class AudioManager {
         this._wallCoolMs        = 80;
 
         this._milestonesHit = new Set();
-        this._lastSpeakTime = 0;
 
         this.volume = 0.7;
 
-        // Pre-allocated noise buffer pool — reused to avoid per-collision alloc
+        // Noise buffer pool — reused per duration key to avoid per-collision alloc
         this._noiseBuffers = new Map();
 
-        // MOBILE FIX: Guard ALL speechSynthesis access behind a feature check.
-        // On some Android WebViews speechSynthesis is undefined — calling any
-        // method on it crashes the entire app at construction time.
+        // Guard ALL speechSynthesis access — undefined on some Android WebViews
         this._hasSpeech = typeof window !== 'undefined'
             && 'speechSynthesis' in window
-            && typeof window.speechSynthesis !== 'undefined';
+            && window.speechSynthesis != null;
 
-        this._voices = [];
-        if (this._hasSpeech) {
-            this._voices = window.speechSynthesis.getVoices() || [];
-            if (this._voices.length === 0) {
-                window.speechSynthesis.addEventListener('voiceschanged', () => {
-                    this._voices = window.speechSynthesis.getVoices() || [];
-                }, { once: false });
-            }
-        }
-
-        // MOBILE FIX: visibilitychange — guard every API call inside
+        // Pause audio + cancel speech when app is backgrounded (notifications, app switch)
         this._handleVisibility = () => {
             if (document.hidden) {
                 if (this._hasSpeech) {
@@ -68,9 +63,7 @@ export default class AudioManager {
             this._masterGain = this._ctx.createGain();
             this._masterGain.gain.value = this.volume;
             this._masterGain.connect(this._ctx.destination);
-        } catch (e) {
-            this._ctx = null;
-        }
+        } catch (e) { this._ctx = null; }
         return this._ctx;
     }
 
@@ -83,7 +76,7 @@ export default class AudioManager {
         return ctx;
     }
 
-    // ── Low-level helpers ─────────────────────────────────────────────────────
+    // ── Low-level synth helpers ───────────────────────────────────────────────
 
     _tone(freq, startTime, duration, gain = 0.4, type = 'sine', fadeOut = 0.05) {
         const ctx = this._resume();
@@ -91,12 +84,11 @@ export default class AudioManager {
         try {
             const osc = ctx.createOscillator();
             const g   = ctx.createGain();
-            osc.type = type;
+            osc.type  = type;
             osc.frequency.setValueAtTime(freq, startTime);
             g.gain.setValueAtTime(0, startTime);
             g.gain.linearRampToValueAtTime(gain, startTime + 0.005);
-            const decayStart = startTime + duration - fadeOut;
-            g.gain.setValueAtTime(gain, decayStart);
+            g.gain.setValueAtTime(gain, startTime + duration - fadeOut);
             g.gain.linearRampToValueAtTime(0, startTime + duration);
             osc.connect(g);
             g.connect(this._masterGain);
@@ -112,10 +104,10 @@ export default class AudioManager {
             const key = Math.round(duration * 1000);
             let buffer = this._noiseBuffers.get(key);
             if (!buffer) {
-                const bufferSize = Math.ceil(ctx.sampleRate * duration);
-                buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+                const size = Math.ceil(ctx.sampleRate * duration);
+                buffer     = ctx.createBuffer(1, size, ctx.sampleRate);
                 const data = buffer.getChannelData(0);
-                for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+                for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
                 this._noiseBuffers.set(key, buffer);
             }
             const src    = ctx.createBufferSource();
@@ -149,8 +141,8 @@ export default class AudioManager {
         const t        = ctx.currentTime;
         const baseFreq = 130 * Math.pow(2, Math.random() * 2);
         const gain     = 0.10 + Math.random() * 0.06;
-        this._tone(baseFreq,       t,    0.06, gain,        'sine', 0.055);
-        this._tone(baseFreq * 1.5, t,    0.03, gain * 0.35, 'sine', 0.025);
+        this._tone(baseFreq,       t, 0.06, gain,        'sine', 0.055);
+        this._tone(baseFreq * 1.5, t, 0.03, gain * 0.35, 'sine', 0.025);
         this._noise(t, 0.025, gain * 0.45, 900);
     }
 
@@ -171,8 +163,8 @@ export default class AudioManager {
         const ctx = this._resume();
         if (!ctx) return;
         const t = ctx.currentTime;
-        this._tone(850,  t,        0.035, 0.28, 'square',   0.030);
-        this._tone(450,  t + 0.01, 0.030, 0.12, 'triangle', 0.025);
+        this._tone(850, t,        0.035, 0.28, 'square',   0.030);
+        this._tone(450, t + 0.01, 0.030, 0.12, 'triangle', 0.025);
         this._noise(t, 0.020, 0.05, 3500);
     }
 
@@ -186,7 +178,7 @@ export default class AudioManager {
     }
 
     playCountdown(number) {
-        const ctx  = this._resume();
+        const ctx = this._resume();
         if (!ctx) return;
         const t    = ctx.currentTime;
         const freq = number === 1 ? 880 : 440;
@@ -218,7 +210,7 @@ export default class AudioManager {
         else if (pct <= 0.50 && pct > 0.25) key = '50pct';
         if (!key || this._milestonesHit.has(key)) return;
         this._milestonesHit.add(key);
-        const ctx  = this._resume();
+        const ctx = this._resume();
         if (!ctx) return;
         const t    = ctx.currentTime;
         const freq = { '50pct': 523, '25pct': 659, '10': 880 }[key];
@@ -232,55 +224,44 @@ export default class AudioManager {
     }
 
     // ── Speech synthesis ──────────────────────────────────────────────────────
-
-    _pickVoice() {
-        if (!this._hasSpeech) return null;
-        const voices = this._voices.length > 0
-            ? this._voices
-            : (window.speechSynthesis.getVoices() || []);
-        return voices.find(v =>
-            v.lang && v.lang.startsWith('en') && /male|guy|david|mark|alex/i.test(v.name)
-        ) || voices.find(v => v.lang && v.lang.startsWith('en'))
-          || voices[0]
-          || null;
-    }
+    //
+    // ANDROID FIX: The only reliable way to get TTS working on Android WebView
+    // is to NOT specify a voice at all and just set utt.lang = 'en-US'.
+    // The Android TTS engine picks the correct voice automatically.
+    // Specifying a voice (from getVoices()) causes silent failures because:
+    //   1. getVoices() returns [] until voiceschanged fires
+    //   2. Even after voiceschanged, voice objects may not be valid across
+    //      utterances in Capacitor's WebView
+    //
+    // We cancel any pending speech, create the utterance, and speak immediately.
+    // No setTimeout — delays cause the utterance to be cancelled by the next
+    // round starting before it fires.
 
     speak(text) {
         if (!this._hasSpeech) return;
+        if (document.hidden) return;
         try {
             window.speechSynthesis.cancel();
-            setTimeout(() => {
-                if (document.hidden) return;
-                if (!this._hasSpeech) return;
-                try {
-                    const utt   = new SpeechSynthesisUtterance(text);
-                    utt.rate    = 0.92;
-                    utt.pitch   = 1.05;
-                    utt.volume  = 1.0;
-                    utt.lang    = 'en-US';
-                    const voice = this._pickVoice();
-                    if (voice) utt.voice = voice;
-                    this._lastSpeakTime = Date.now();
-                    window.speechSynthesis.speak(utt);
-                } catch (e) {}
-            }, 120);
+            const utt  = new SpeechSynthesisUtterance(text);
+            utt.lang   = 'en-US';   // let OS pick the voice — works on all Android
+            utt.rate   = 0.90;
+            utt.pitch  = 1.0;
+            utt.volume = 1.0;
+            window.speechSynthesis.speak(utt);
         } catch (e) {}
     }
 
     speakCommentary(text) {
+        // Commentary is lower priority — skip if speech is already active
         if (!this._hasSpeech) return;
         if (document.hidden) return;
-        const now = Date.now();
-        if (this._lastSpeakTime && now - this._lastSpeakTime < 4000) return;
         try {
-            window.speechSynthesis.cancel();
-            const utt   = new SpeechSynthesisUtterance(text);
-            utt.rate    = 1.05;
-            utt.pitch   = 1.00;
-            utt.volume  = 0.80;
-            utt.lang    = 'en-US';
-            const voice = this._pickVoice();
-            if (voice) utt.voice = voice;
+            if (window.speechSynthesis.speaking) return;
+            const utt  = new SpeechSynthesisUtterance(text);
+            utt.lang   = 'en-US';
+            utt.rate   = 1.05;
+            utt.pitch  = 1.0;
+            utt.volume = 0.85;
             window.speechSynthesis.speak(utt);
         } catch (e) {}
     }
