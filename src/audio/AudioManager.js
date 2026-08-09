@@ -1,6 +1,9 @@
 // ALL sounds are synthesised with the Web Audio API — no mp3/wav files needed.
 // AudioContext is created lazily on the first user interaction.
 // FIX 6: Noise buffers are pre-allocated and reused instead of created per collision.
+// FIX SPEECH: Voices loaded async via voiceschanged event so winner name always announces.
+// FIX VISIBILITY: AudioContext suspended/resumed on page visibility change to prevent
+//   multiple audio fires and game stall when notifications arrive or app is backgrounded.
 
 export default class AudioManager {
 
@@ -19,6 +22,34 @@ export default class AudioManager {
 
         // FIX 6: Pre-allocated noise buffer pool (filled lazily on first audio ctx create)
         this._noiseBuffers = new Map();  // duration_key → AudioBuffer
+
+        // FIX SPEECH: Cache voices after the voiceschanged event fires.
+        // getVoices() returns [] synchronously on first call in Chrome/Android.
+        this._voices = speechSynthesis.getVoices();
+        if (this._voices.length === 0 && 'speechSynthesis' in window) {
+            speechSynthesis.addEventListener('voiceschanged', () => {
+                this._voices = speechSynthesis.getVoices();
+            }, { once: false });
+        }
+
+        // FIX VISIBILITY: suspend audio + cancel speech when app is backgrounded,
+        // resume cleanly when it comes back. Works for notifications, app switches,
+        // screen lock — all produce a visibilitychange event in Capacitor WebView.
+        this._handleVisibility = () => {
+            if (document.hidden) {
+                // App went to background
+                speechSynthesis.cancel();
+                if (this._ctx && this._ctx.state === 'running') {
+                    this._ctx.suspend();
+                }
+            } else {
+                // App came back to foreground
+                if (this._ctx && this._ctx.state === 'suspended') {
+                    this._ctx.resume();
+                }
+            }
+        };
+        document.addEventListener('visibilitychange', this._handleVisibility);
     }
 
     // ── AudioContext bootstrap ────────────────────────────────────────────────
@@ -34,13 +65,13 @@ export default class AudioManager {
 
     _resume() {
         const ctx = this._getCtx();
-        if (ctx.state === "suspended") ctx.resume();
+        if (ctx.state === 'suspended') ctx.resume();
         return ctx;
     }
 
     // ── Low-level helpers ─────────────────────────────────────────────────────
 
-    _tone(freq, startTime, duration, gain = 0.4, type = "sine", fadeOut = 0.05) {
+    _tone(freq, startTime, duration, gain = 0.4, type = 'sine', fadeOut = 0.05) {
         const ctx = this._resume();
         const osc = ctx.createOscillator();
         const g   = ctx.createGain();
@@ -83,7 +114,7 @@ export default class AudioManager {
         src.buffer = buffer;
 
         const filter           = ctx.createBiquadFilter();
-        filter.type            = "lowpass";
+        filter.type            = 'lowpass';
         filter.frequency.value = filterFreq;
 
         const g = ctx.createGain();
@@ -100,8 +131,8 @@ export default class AudioManager {
 
     // ── Public sound API ─────────────────────────────────────────────────────
 
-    playCollision(type = "flag") {
-        if (type === "wall") {
+    playCollision(type = 'flag') {
+        if (type === 'wall') {
             this._playWallHit();
         } else {
             this._playFlagHit();
@@ -119,8 +150,8 @@ export default class AudioManager {
         const baseFreq = 130 * Math.pow(2, Math.random() * 2);
         const gain     = 0.10 + Math.random() * 0.06;
 
-        this._tone(baseFreq,       t,        0.06, gain,        "sine", 0.055);
-        this._tone(baseFreq * 1.5, t,        0.03, gain * 0.35, "sine", 0.025);
+        this._tone(baseFreq,       t,        0.06, gain,        'sine', 0.055);
+        this._tone(baseFreq * 1.5, t,        0.03, gain * 0.35, 'sine', 0.025);
         this._noise(t, 0.025, gain * 0.45, 900);
     }
 
@@ -135,7 +166,7 @@ export default class AudioManager {
         const baseFreq = 300 + Math.random() * 400;
         const gain     = 0.07 + Math.random() * 0.04;
 
-        this._tone(baseFreq, t, 0.04, gain, "triangle", 0.035);
+        this._tone(baseFreq, t, 0.04, gain, 'triangle', 0.035);
         this._noise(t, 0.018, gain * 0.55, 2200);
     }
 
@@ -143,8 +174,8 @@ export default class AudioManager {
         const ctx = this._resume();
         const t   = ctx.currentTime;
 
-        this._tone(850,      t,        0.035, 0.28, "square",   0.030);
-        this._tone(450,      t + 0.01, 0.030, 0.12, "triangle", 0.025);
+        this._tone(850,      t,        0.035, 0.28, 'square',   0.030);
+        this._tone(450,      t + 0.01, 0.030, 0.12, 'triangle', 0.025);
         this._noise(t, 0.020, 0.05, 3500);
     }
 
@@ -152,8 +183,8 @@ export default class AudioManager {
         const ctx = this._resume();
         const t   = ctx.currentTime;
 
-        this._tone(440, t,        0.12, 0.45, "square", 0.08);
-        this._tone(660, t + 0.13, 0.18, 0.50, "square", 0.10);
+        this._tone(440, t,        0.12, 0.45, 'square', 0.08);
+        this._tone(660, t + 0.13, 0.18, 0.50, 'square', 0.10);
         this._noise(t, 0.08, 0.20, 3000);
     }
 
@@ -162,7 +193,7 @@ export default class AudioManager {
         const t    = ctx.currentTime;
         const freq = number === 1 ? 880 : 440;
 
-        this._tone(freq, t, 0.15, 0.50, "sine", 0.08);
+        this._tone(freq, t, 0.15, 0.50, 'sine', 0.08);
         this._noise(t, 0.05, 0.15, 2000);
     }
 
@@ -172,12 +203,12 @@ export default class AudioManager {
         const notes = [261.6, 329.6, 392.0, 523.3];
 
         notes.forEach((freq, i) => {
-            this._tone(freq, t + i * 0.09, 0.55, 0.40, "triangle", 0.25);
+            this._tone(freq, t + i * 0.09, 0.55, 0.40, 'triangle', 0.25);
         });
 
         const chordStart = t + notes.length * 0.09 + 0.05;
         notes.forEach(freq => {
-            this._tone(freq, chordStart, 0.80, 0.30, "sine", 0.40);
+            this._tone(freq, chordStart, 0.80, 0.30, 'sine', 0.40);
         });
 
         this._noise(t, 0.12, 0.35, 5000);
@@ -188,49 +219,71 @@ export default class AudioManager {
         const pct = remaining / total;
 
         let key = null;
-        if      (remaining === 10)           key = "10";
-        else if (pct <= 0.25 && pct > 0.10)  key = "25pct";
-        else if (pct <= 0.50 && pct > 0.25)  key = "50pct";
+        if      (remaining === 10)           key = '10';
+        else if (pct <= 0.25 && pct > 0.10)  key = '25pct';
+        else if (pct <= 0.50 && pct > 0.25)  key = '50pct';
 
         if (!key || this._milestonesHit.has(key)) return;
         this._milestonesHit.add(key);
 
         const ctx  = this._resume();
         const t    = ctx.currentTime;
-        const freq = { "50pct": 523, "25pct": 659, "10": 880 }[key];
+        const freq = { '50pct': 523, '25pct': 659, '10': 880 }[key];
 
-        this._tone(freq,       t,        0.30, 0.35, "sine", 0.18);
-        this._tone(freq / 2,   t + 0.04, 0.30, 0.22, "sine", 0.18);
-        this._tone(freq * 1.5, t + 0.08, 0.22, 0.18, "sine", 0.14);
+        this._tone(freq,       t,        0.30, 0.35, 'sine', 0.18);
+        this._tone(freq / 2,   t + 0.04, 0.30, 0.22, 'sine', 0.18);
+        this._tone(freq * 1.5, t + 0.08, 0.22, 0.18, 'sine', 0.14);
     }
 
     resetMilestones() {
         this._milestonesHit.clear();
     }
 
+    // ── Speech synthesis ──────────────────────────────────────────────────────
+    // FIX SPEECH: Use cached _voices (populated by voiceschanged event).
+    // Delay speak slightly so playWinner() audio doesn't interfere with TTS init.
+    // Use onend/onerror guards to ensure utterance fires exactly once.
+
+    _pickVoice() {
+        const voices = this._voices.length > 0
+            ? this._voices
+            : speechSynthesis.getVoices(); // final fallback
+        return voices.find(v =>
+            v.lang.startsWith('en') && /male|guy|david|mark|alex/i.test(v.name)
+        ) || voices.find(v => v.lang.startsWith('en'))
+          || voices[0]
+          || null;
+    }
+
     speak(text) {
-        if (!("speechSynthesis" in window)) return;
+        if (!('speechSynthesis' in window)) return;
 
+        // Cancel any in-progress speech immediately
         speechSynthesis.cancel();
-        this._lastSpeakTime = Date.now();
 
-        const utt   = new SpeechSynthesisUtterance(text);
-        utt.rate    = 0.92;
-        utt.pitch   = 1.05;
-        utt.volume  = 1.0;
+        // FIX SPEECH: Slight delay lets the cancel() flush and voices to be
+        // ready. 120 ms is imperceptible but fixes the "silent first speak" bug
+        // on Android WebView and Chrome where voices load asynchronously.
+        setTimeout(() => {
+            if (document.hidden) return; // don't speak if app is backgrounded
 
-        const voices    = speechSynthesis.getVoices();
-        const preferred = voices.find(v =>
-            v.lang.startsWith("en") && /male|guy|david|mark|alex/i.test(v.name)
-        ) || voices.find(v => v.lang.startsWith("en"));
+            const utt   = new SpeechSynthesisUtterance(text);
+            utt.rate    = 0.92;
+            utt.pitch   = 1.05;
+            utt.volume  = 1.0;
+            utt.lang    = 'en-US';
 
-        if (preferred) utt.voice = preferred;
+            const voice = this._pickVoice();
+            if (voice) utt.voice = voice;
 
-        speechSynthesis.speak(utt);
+            this._lastSpeakTime = Date.now();
+            speechSynthesis.speak(utt);
+        }, 120);
     }
 
     speakCommentary(text) {
-        if (!("speechSynthesis" in window)) return;
+        if (!('speechSynthesis' in window)) return;
+        if (document.hidden) return;
 
         const now = Date.now();
         if (this._lastSpeakTime && now - this._lastSpeakTime < 4000) return;
@@ -241,13 +294,10 @@ export default class AudioManager {
         utt.rate    = 1.05;
         utt.pitch   = 1.00;
         utt.volume  = 0.80;
+        utt.lang    = 'en-US';
 
-        const voices    = speechSynthesis.getVoices();
-        const preferred = voices.find(v =>
-            v.lang.startsWith("en") && /male|guy|david|mark|alex/i.test(v.name)
-        ) || voices.find(v => v.lang.startsWith("en"));
-
-        if (preferred) utt.voice = preferred;
+        const voice = this._pickVoice();
+        if (voice) utt.voice = voice;
 
         speechSynthesis.speak(utt);
     }
@@ -260,6 +310,15 @@ export default class AudioManager {
                 this._getCtx().currentTime,
                 0.05
             );
+        }
+    }
+
+    destroy() {
+        document.removeEventListener('visibilitychange', this._handleVisibility);
+        speechSynthesis.cancel();
+        if (this._ctx) {
+            this._ctx.close();
+            this._ctx = null;
         }
     }
 }

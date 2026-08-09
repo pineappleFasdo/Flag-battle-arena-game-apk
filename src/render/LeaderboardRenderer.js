@@ -189,6 +189,9 @@ export default class LeaderboardRenderer {
         ctx.clip();
 
         if (ready) {
+            // FIX CRISP: high-quality image interpolation for leaderboard flags
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(img, fx, fy, fw, fh);
         } else {
             const shimX = fx + (this._shimmerPhase * 2 - 0.5) * fw * 2;

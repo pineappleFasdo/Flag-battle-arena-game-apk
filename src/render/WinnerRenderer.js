@@ -38,6 +38,10 @@ export default class WinnerRender {
             const flagX      = cx - flagWidth / 2;
             const flagY      = cy - flagHeight / 2;
 
+            // FIX CRISP: high-quality image interpolation for winner flag
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+
             // Soft multi-pass gold glow (no geometric disc)
             ctx.shadowColor = `rgba(255,215,0,${0.55 * fade})`;
             ctx.shadowBlur  = 56 * ease;
@@ -129,6 +133,8 @@ export default class WinnerRender {
             const x   = startX + i * (flagW + gap);
 
             if (img && img.complete) {
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
                 ctx.shadowColor = "rgba(255,100,100,0.35)";
                 ctx.shadowBlur  = 24;
                 ctx.drawImage(img, x, flagY, flagW, flagH);

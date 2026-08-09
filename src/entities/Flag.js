@@ -52,6 +52,11 @@ export default class Flag {
         ctx.translate(p.x, p.y);
         ctx.rotate(angle);
 
+        // FIX CRISP: Use high-quality image interpolation so flags look sharp
+        // even when drawn at sizes that don't exactly match the source resolution.
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+
         const img = this.country.image;
 
         // Always prefer the real flag image when it is loaded

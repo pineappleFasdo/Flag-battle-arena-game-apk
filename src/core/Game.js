@@ -87,6 +87,11 @@ export default class Game {
         this._spawnPerFrame  = 12;
     }
 
+    // FIX CRISP: Logical width/height — use these everywhere in draw/layout code
+    // instead of canvas.width/canvas.height so coordinates stay in CSS pixels.
+    get _lw() { return this._logicalW || this.canvas.width; }
+    get _lh() { return this._logicalH || this.canvas.height; }
+
     // ── Random batch with less-repeat ─────────────────────────────────────────
 
     _pickNextBatch() {
@@ -131,13 +136,30 @@ export default class Game {
 
     // ── Resize ────────────────────────────────────────────────────────────────
 
-    resize(width, height) {
+    resize(width, height, dpr = 1) {
+        // FIX CRISP: Store dpr so draw() can reference it if needed.
+        this._dpr = dpr;
+
         this.canvas.width  = width;
         this.canvas.height = height;
 
-        this.layout.update(width, height);
+        // FIX CRISP: Reset transform then scale the context by devicePixelRatio.
+        // All subsequent canvas draw calls use logical-pixel coords (same as before)
+        // but the output is rendered at native physical-pixel resolution.
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0); // reset any previous scale
+        this.ctx.scale(dpr, dpr);
 
-        this.physics = new PhysicsWorld(width, height);
+        // Expose logical dimensions for all layout / draw code
+        // (physics, layout, renderer — everything reads these two values)
+        this._logicalW = width  / dpr;
+        this._logicalH = height / dpr;
+
+        // FIX CRISP: layout always works in logical (CSS) pixels
+        const lw = width  / dpr;
+        const lh = height / dpr;
+        this.layout.update(lw, lh);
+
+        this.physics = new PhysicsWorld(lw, lh);
         Matter.Events.on(this.physics.engine, "collisionStart", (event) => {
 
             const isPlaying   = this.gameState === "PLAYING";
@@ -213,12 +235,12 @@ export default class Game {
         const isTie = winner?.isTie === true;
 
         if (isTie && !winner.isSilent) {
-            this.confetti.start(this.canvas.width / 2, this.canvas.height * 0.4, 130);
+            this.confetti.start(this._lw / 2, this._lh * 0.4, 130);
             this.audio.playWinner();
             const names = (winner.countries ?? []).map(c => c.name).join(" and ");
             if (names) this.audio.speak(`It's a tie between ${names}!`);
         } else if (!isTie) {
-            this.confetti.start(this.canvas.width / 2, this.canvas.height * 0.36, 150);
+            this.confetti.start(this._lw / 2, this._lh * 0.36, 150);
             this.audio.playWinner();
             this.audio.speak(`${winner.country.name} wins!`);
         }
@@ -258,7 +280,7 @@ export default class Game {
         this.trayLauncher.startLaunch(
             launchFlags,
             this.layout.trayTop,
-            this.canvas.width,
+            this._lw,
             this.layout.arenaX,
             this.layout.arenaY,
             this.layout.arenaRadius,
@@ -484,7 +506,7 @@ export default class Game {
         const layout  = this.layout;
 
         ctx.fillStyle = "#111";
-        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        ctx.fillRect(0, 0, this._lw, this._lh);
 
         if (this.gameState === "START_SCREEN") return;
 
@@ -512,17 +534,17 @@ export default class Game {
             this.bottomTrayRenderer.draw(
                 ctx,
                 this.eliminationManager?.eliminated ?? [],
-                this.canvas.width, this.canvas.height
+                this._lw, this._lh
             );
         } else {
             this.bottomTrayRenderer.draw(
                 ctx,
                 [],
-                this.canvas.width, this.canvas.height
+                this._lw, this._lh
             );
         }
 
-        this.fx.draw(ctx, this.canvas.width, this.canvas.height);
+        this.fx.draw(ctx, this._lw, this._lh);
 
         this._drawCentralOverlay(ctx);
 
@@ -533,7 +555,7 @@ export default class Game {
                 : 1;
             this.winnerRender.draw(
                 ctx, this.winnerManager.winner,
-                this.canvas.width, this.canvas.height,
+                this._lw, this._lh,
                 this.gameState === "COUNTDOWN",
                 animT
             );
@@ -554,7 +576,7 @@ export default class Game {
 
     _drawNextEventOverlay(ctx) {
         const ev    = this.eventManager;
-        const cx    = this.canvas.width  / 2;
+        const cx    = this._lw / 2;
         const cy    = this.layout.arenaY;
         const total = this.nextEventDuration;
         const timer = this.nextEventTimer;
@@ -571,14 +593,14 @@ export default class Game {
         ctx.globalAlpha = alpha;
 
         ctx.fillStyle = "rgba(0,0,0,0.42)";
-        ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        ctx.fillRect(0, 0, this._lw, this._lh);
 
         ctx.translate(cx, cy);
         ctx.scale(scale, scale);
         ctx.translate(-cx, -cy);
 
-        const cardW = Math.min(this.canvas.width * 0.72, 420);
-        const cardH = Math.min(this.canvas.height * 0.28, 200);
+        const cardW = Math.min(this._lw * 0.72, 420);
+        const cardH = Math.min(this._lh * 0.28, 200);
         const cardX = cx - cardW / 2;
         const cardY = cy - cardH / 2;
 
@@ -600,18 +622,18 @@ export default class Game {
         ctx.shadowColor  = "rgba(0,0,0,0.95)";
         ctx.shadowBlur   = 12;
 
-        const titleSize = Math.min(this.canvas.width * 0.028, 22);
+        const titleSize = Math.min(this._lw * 0.028, 22);
         ctx.font = `700 ${titleSize}px system-ui, Arial, sans-serif`;
         ctx.fillStyle = "rgba(255,215,0,0.95)";
         ctx.fillText("NEXT EVENT", cx, cy - cardH * 0.28);
 
         const pulse = 1 + 0.04 * Math.sin(timer * 0.1);
-        const iconSize = Math.min(this.canvas.width * 0.08, 52) * pulse;
+        const iconSize = Math.min(this._lw * 0.08, 52) * pulse;
         ctx.font = `${iconSize}px system-ui, Arial, sans-serif`;
         ctx.shadowBlur = 20;
         ctx.fillText(ev.icon, cx, cy - 4);
 
-        const eventSize = Math.min(this.canvas.width * 0.055, 42);
+        const eventSize = Math.min(this._lw * 0.055, 42);
         ctx.font = `900 ${eventSize}px system-ui, Arial, sans-serif`;
         ctx.fillStyle = ev.color;
         ctx.shadowColor = this._hexToRgba(ev.color, 0.5);
@@ -624,7 +646,7 @@ export default class Game {
     _drawCountdownOverlay(ctx) {
         if (this.restartCountdown <= 0) return;
 
-        const cx = this.canvas.width  / 2;
+        const cx = this._lw / 2;
         const cy = this.layout.arenaY;
         const ev = this.eventManager;
 
@@ -640,12 +662,12 @@ export default class Game {
         ctx.shadowColor  = "rgba(0,0,0,0.95)";
         ctx.shadowBlur   = 14;
 
-        const evSize = Math.min(this.canvas.width * 0.030, 24);
+        const evSize = Math.min(this._lw * 0.030, 24);
         ctx.font = `700 ${evSize}px system-ui, Arial, sans-serif`;
         ctx.fillStyle = ev.color;
         ctx.fillText(`${ev.icon}  ${ev.name}`, cx, cy - 110);
 
-        const labelSize = Math.min(this.canvas.width * 0.028, 22);
+        const labelSize = Math.min(this._lw * 0.028, 22);
         ctx.font = `600 ${labelSize}px system-ui, Arial, sans-serif`;
         ctx.fillStyle = "rgba(255,255,255,0.88)";
         ctx.shadowBlur = 12;
@@ -654,7 +676,7 @@ export default class Game {
         ctx.save();
         ctx.translate(cx, cy + 20);
         ctx.scale(numScale, numScale);
-        const numSize = Math.min(this.canvas.width * 0.17, 140);
+        const numSize = Math.min(this._lw * 0.17, 140);
         ctx.font = `900 ${numSize}px system-ui, Arial, sans-serif`;
         ctx.fillStyle = "#FFD700";
         ctx.shadowColor = "rgba(0,0,0,0.90)";
@@ -684,9 +706,7 @@ export default class Game {
         return `rgba(${r},${g},${b},${alpha})`;
     }
 
-    loop = () => {
-        this.update();
-        this.draw();
-        requestAnimationFrame(this.loop);
-    };
+    // NOTE: The game loop lives in main.js (requestAnimationFrame + visibility pause).
+    // This stub is kept so any accidental legacy calls are a no-op.
+    loop() {}
 }
