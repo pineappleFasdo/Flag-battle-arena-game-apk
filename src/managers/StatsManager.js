@@ -223,7 +223,7 @@ export default class StatsManager {
         };
     }
 
-    static formatMs(ms) {
+    formatMs(ms) {
         if (ms == null || !Number.isFinite(ms)) return "—";
         const s = ms / 1000;
         if (s < 60) return `${s.toFixed(1)}s`;

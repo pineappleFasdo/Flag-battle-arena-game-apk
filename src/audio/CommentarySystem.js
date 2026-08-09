@@ -20,7 +20,8 @@ export default class AudioManager {
     _getCtx() {
         if (this._ctx) return this._ctx;
 
-        this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+        // MOBILE FIX: create lazily on first use, not in constructor
+        this._ctx = null;
 
         this._masterGain            = this._ctx.createGain();
         this._masterGain.gain.value = this.volume;
@@ -214,23 +215,22 @@ playElimination() {
 
     /** Web Speech API — "India wins!" etc. */
     speak(text) {
-        if (!("speechSynthesis" in window)) return;
-
-        speechSynthesis.cancel();
+        if (!("speechSynthesis" in window) || !window.speechSynthesis) return;
+        try { window.speechSynthesis.cancel(); } catch(e) { return; }
 
         const utt   = new SpeechSynthesisUtterance(text);
         utt.rate    = 0.92;
         utt.pitch   = 1.05;
         utt.volume  = 1.0;
 
-        const voices    = speechSynthesis.getVoices();
+        const voices    = window.speechSynthesis.getVoices() || [];
         const preferred = voices.find(v =>
             v.lang.startsWith("en") && /male|guy|david|mark|alex/i.test(v.name)
         ) || voices.find(v => v.lang.startsWith("en"));
 
         if (preferred) utt.voice = preferred;
 
-        speechSynthesis.speak(utt);
+        try { window.speechSynthesis.speak(utt); } catch(e) {}
     }
 
     setVolume(v) {

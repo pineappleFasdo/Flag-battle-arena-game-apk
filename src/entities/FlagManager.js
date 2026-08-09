@@ -1,14 +1,15 @@
 import Matter from "matter-js";
 import Flag   from "./Flag";
 
+
+const MAX_SPEED = 12;
+const STILL_SPEED = 0.35;
+const STILL_FRAMES = 50;
 export default class FlagManager {
 
     // Soft speed cap (px/frame equivalent) — stops turbo explosions
-    static MAX_SPEED = 12;
 
     // Below this speed for STILL_FRAMES → considered stuck
-    static STILL_SPEED   = 0.35;
-    static STILL_FRAMES  = 50;   // ~0.83 s — slightly less aggressive
 
     constructor(world) {
         this.world = world;
@@ -28,7 +29,7 @@ export default class FlagManager {
      */
     update(arena = null) {
 
-        const maxSpd = FlagManager.MAX_SPEED;
+        const maxSpd = MAX_SPEED;
 
         for (let i = this.flags.length - 1; i >= 0; i--) {
             const flag = this.flags[i];
@@ -50,13 +51,13 @@ export default class FlagManager {
             }
 
             // ── Anti-stuck (only when near wall — early-game center flags ignored) ──
-            if (spd < FlagManager.STILL_SPEED) {
+            if (spd < STILL_SPEED) {
                 flag._stillFrames = (flag._stillFrames || 0) + 1;
             } else {
                 flag._stillFrames = 0;
             }
 
-            if (flag._stillFrames >= FlagManager.STILL_FRAMES) {
+            if (flag._stillFrames >= STILL_FRAMES) {
                 flag._stillFrames = 0;
 
                 // PERFORMANCE: Skip expensive gap-angle math unless flag is near the rim

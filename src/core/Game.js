@@ -32,7 +32,7 @@ export default class Game {
 
         // ── Country rotation (all countries over time, 100 per round) ──
         this.allCountries   = countries;
-        this.roundSize      = 100;          // change to 60 for lower CPU
+        this.roundSize      = 249;          // 249 = all countries; lower for less CPU
         this._recentBatches = [];           // last 2 batches (less-repeat)
 
         this.activeCountries = this._pickNextBatch();
@@ -339,7 +339,7 @@ export default class Game {
         this._countdownTickStart = performance.now();
 
         this.arena.radius        = this.layout.arenaRadius;
-        this.arena.state          = ArenaPhysics.STATE_INTRO;
+        this.arena.state          = "INTRO";
         this.arena.introTimer    = 0;
         this.arena.introDuration = 99999;
         this.arena.gapSize       = 0;
@@ -399,7 +399,7 @@ export default class Game {
 
     _startPlaying() {
         this.gameState     = "PLAYING";
-        this.arena.state    = ArenaPhysics.STATE_PLAYING;
+        this.arena.state    = "PLAYING";
         this.arena.gapSize = this.arena.initialGapSize;
         this.arena.syncWalls();
         this.audio.playRoundStart();
@@ -706,7 +706,7 @@ export default class Game {
         return `rgba(${r},${g},${b},${alpha})`;
     }
 
-    // NOTE: The game loop lives in main.js (requestAnimationFrame + visibility pause).
-    // This stub is kept so any accidental legacy calls are a no-op.
-    loop() {}
+    // The game loop now lives in main.js.
+    // This no-op arrow field means any stale game.loop() call is safe.
+    loop = () => {};
 }

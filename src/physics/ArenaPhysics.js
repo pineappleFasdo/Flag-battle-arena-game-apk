@@ -1,10 +1,12 @@
 import Matter from "matter-js";
 
+const STATE_INTRO   = "INTRO";
+const STATE_OPENING = "OPENING";
+const STATE_PLAYING = "PLAYING";
+
 export default class ArenaPhysics {
 
-    static STATE_INTRO   = "INTRO";
-    static STATE_OPENING = "OPENING";
-    static STATE_PLAYING = "PLAYING";
+
 
     constructor(world, cx, cy, radius) {
 
@@ -23,7 +25,7 @@ export default class ArenaPhysics {
         this.maxGapSize     = 12;  // scaled for fewer segments (was 22 @ 96)
         this.gapSize        = 0;
 
-        this.state           = ArenaPhysics.STATE_INTRO;
+        this.state           = STATE_INTRO;
         this.introDuration   = 180;
         this.introTimer      = 0;
         this.openingDuration = 90;
@@ -73,7 +75,7 @@ export default class ArenaPhysics {
 
     setRemainingFlags(count) {
         this.remainingFlags = count;
-        if (this.state !== ArenaPhysics.STATE_PLAYING) return;
+        if (this.state !== STATE_PLAYING) return;
 
         const eliminated = this.totalFlags - count;
         const t = Math.max(0, Math.min(1, eliminated / Math.max(1, this.totalFlags - 1)));
@@ -85,8 +87,8 @@ export default class ArenaPhysics {
 
 
     startOpening() {
-        if (this.state === ArenaPhysics.STATE_INTRO) {
-            this.state        = ArenaPhysics.STATE_OPENING;
+        if (this.state === STATE_INTRO) {
+            this.state        = STATE_OPENING;
             this.openingTimer = 0;
         }
     }
@@ -95,7 +97,7 @@ export default class ArenaPhysics {
     // FIX 2b: syncWalls() is only called explicitly (resize/state-change).
     // update() does the inline wall sync itself to avoid a double-loop.
     syncWalls() {
-        const effectiveGap = (this.state === ArenaPhysics.STATE_PLAYING)
+        const effectiveGap = (this.state === STATE_PLAYING)
             ? this.gapSize
             : 0;
 
@@ -122,8 +124,8 @@ export default class ArenaPhysics {
 
     get isIntro() {
         return (
-            this.state === ArenaPhysics.STATE_INTRO ||
-            this.state === ArenaPhysics.STATE_OPENING
+            this.state === STATE_INTRO ||
+            this.state === STATE_OPENING
         );
     }
 
@@ -131,7 +133,7 @@ export default class ArenaPhysics {
     update() {
 
         // ── State machine ──────────────────────────────────────────────────
-        if (this.state === ArenaPhysics.STATE_INTRO) {
+        if (this.state === STATE_INTRO) {
             this.introTimer++;
             this.rotationSpeed = 0.024 + 0.010 * Math.sin(this.introTimer * 0.06);
 
@@ -139,7 +141,7 @@ export default class ArenaPhysics {
                 this.startOpening();
             }
 
-        } else if (this.state === ArenaPhysics.STATE_OPENING) {
+        } else if (this.state === STATE_OPENING) {
             this.openingTimer++;
             const t = Math.min(1, this.openingTimer / this.openingDuration);
             const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
@@ -147,7 +149,7 @@ export default class ArenaPhysics {
             this.rotationSpeed = 0.024;
 
             if (this.openingTimer >= this.openingDuration) {
-                this.state   = ArenaPhysics.STATE_PLAYING;
+                this.state   = STATE_PLAYING;
                 this.gapSize = this.initialGapSize;
             }
 
@@ -159,7 +161,7 @@ export default class ArenaPhysics {
         this.angle += this.rotationSpeed;
         if (this.angle > Math.PI * 2) this.angle -= Math.PI * 2;
 
-        const effectiveGap = (this.state === ArenaPhysics.STATE_PLAYING) ? this.gapSize : 0;
+        const effectiveGap = (this.state === STATE_PLAYING) ? this.gapSize : 0;
 
         this.gapStart = Math.floor(
             (this.angle / (Math.PI * 2)) * this.segmentCount
