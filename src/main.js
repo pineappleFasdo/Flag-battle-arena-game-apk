@@ -1,27 +1,6 @@
 import "./style.css";
 import Game from "./core/Game";
 
-// ── Capacitor bootstrap ─────────────────────────────────────────────────────
-// We import Capacitor plugins lazily so the web build works fine
-// when Capacitor native runtime isn't present (e.g. browser dev mode).
-async function initCapacitor() {
-  try {
-    const { StatusBar, Style } = await import("@capacitor/status-bar");
-    await StatusBar.setStyle({ style: Style.Dark });
-    await StatusBar.setBackgroundColor({ color: "#0a0b10" });
-    await StatusBar.setOverlaysWebView({ overlay: true });
-  } catch (_) {
-    // Running in browser — StatusBar not available, that's fine
-  }
-
-  try {
-    const { SplashScreen } = await import("@capacitor/splash-screen");
-    await SplashScreen.hide({ fadeOutDuration: 400 });
-  } catch (_) {
-    // Running in browser — SplashScreen not available, that's fine
-  }
-}
-
 // ── Canvas ──────────────────────────────────────────────────────────────────
 const canvas = document.createElement("canvas");
 document.body.appendChild(canvas);
@@ -48,15 +27,12 @@ overlay.appendChild(startScreen);
 const game = new Game(canvas);
 
 function resize() {
-  // Use visualViewport on mobile so the canvas accounts for the soft keyboard
-  // and safe-area insets correctly.
   const vp = window.visualViewport;
   game.resize(
     vp ? vp.width  : window.innerWidth,
     vp ? vp.height : window.innerHeight
   );
 }
-
 window.addEventListener("resize", resize);
 if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", resize);
@@ -64,28 +40,44 @@ if (window.visualViewport) {
 resize();
 game.loop();
 
-// ── Capacitor back-button (Android) ────────────────────────────────────────
-// Without this, pressing Back closes the app immediately.
-// We let it restart the game instead (or exit if on start screen).
-try {
-  const { App } = await import("@capacitor/app");
-  App.addListener("backButton", ({ canGoBack }) => {
-    if (game.gameState === "START_SCREEN") {
-      App.exitApp();
-    } else {
-      game._doReset?.();
-    }
-  });
-} catch (_) { /* browser */ }
-
 // ── Button Handlers ─────────────────────────────────────────────────────────
-document.getElementById("nr-start-btn").addEventListener("click", () => {
+document.getElementById("nr-start-btn").addEventListener("click", function() {
   startScreen.classList.add("nr-hiding");
-  setTimeout(() => {
+  setTimeout(function() {
     startScreen.style.display = "none";
     game.startGame();
   }, 380);
 });
 
-// ── Capacitor init ──────────────────────────────────────────────────────────
-initCapacitor();
+// ── Capacitor plugins (loaded after page is ready, never block render) ──────
+// All Capacitor calls are inside a plain function — no top-level await.
+// Dynamic import() is still used so the web build works without native runtime.
+function initCapacitor() {
+  // StatusBar — hide it so canvas fills edge-to-edge
+  import("@capacitor/status-bar").then(function(m) {
+    m.StatusBar.setOverlaysWebView({ overlay: true });
+    m.StatusBar.setStyle({ style: m.Style.Dark });
+    m.StatusBar.setBackgroundColor({ color: "#0a0b10" });
+  }).catch(function() { /* browser — ignore */ });
+
+  // SplashScreen — hide after game has initialised
+  import("@capacitor/splash-screen").then(function(m) {
+    m.SplashScreen.hide({ fadeOutDuration: 400 });
+  }).catch(function() { /* browser — ignore */ });
+
+  // App — intercept Android back button
+  import("@capacitor/app").then(function(m) {
+    m.App.addListener("backButton", function() {
+      if (game.gameState === "START_SCREEN") {
+        m.App.exitApp();
+      } else {
+        if (game._doReset) game._doReset();
+      }
+    });
+  }).catch(function() { /* browser — ignore */ });
+}
+
+// Run after first paint so the game canvas is visible immediately
+requestAnimationFrame(function() {
+  setTimeout(initCapacitor, 0);
+});
