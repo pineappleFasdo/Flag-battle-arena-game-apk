@@ -1,15 +1,27 @@
-// AudioManager.js — Web Audio API synthesis + Speech Synthesis for winner announcements.
+// AudioManager.js
+// Uses @capacitor-community/text-to-speech for winner announcements on Android.
+// Falls back to browser speechSynthesis on desktop/browser (Vite dev server).
+// Web Audio API handles all sound effects — no mp3/wav files needed.
 //
-// KEY FIX for winner announcer on Android:
-//   • Never rely on speechSynthesis.getVoices() — it returns [] until the
-//     voiceschanged event fires, which may be AFTER speak() is called.
-//     Instead we just set utt.lang = 'en-US' and let the OS pick the voice.
-//     This is the correct approach for Android WebView / Capacitor.
-//   • No setTimeout delay — the delay was causing speak() to fire after the
-//     next round had already started, making it feel broken.
-//   • speechSynthesis.cancel() before speak() is enough to clear the queue.
-//   • All speechSynthesis access guarded by this._hasSpeech check.
-//   • AudioContext created lazily on first user gesture only.
+// WHY NATIVE TTS:
+// Browser speechSynthesis inside Capacitor WebView requires speech to be
+// triggered from a direct user-gesture call stack. Any setTimeout (even 0ms)
+// breaks that chain and silently kills the utterance. Native TTS has no such
+// restriction — it talks directly to Android's TTS engine bypassing WebView.
+
+let _nativeTTS = null;   // set once the plugin loads
+let _ttsReady  = false;
+
+// Load the native plugin at module level — non-blocking, safe to fail in browser
+import('@capacitor-community/text-to-speech')
+    .then(m => {
+        _nativeTTS = m.TextToSpeech;
+        _ttsReady  = true;
+    })
+    .catch(() => {
+        // Running in browser (Vite) — will use speechSynthesis fallback
+        _ttsReady = false;
+    });
 
 export default class AudioManager {
 
@@ -23,20 +35,20 @@ export default class AudioManager {
         this._wallCoolMs        = 80;
 
         this._milestonesHit = new Set();
+        this.volume         = 0.7;
 
-        this.volume = 0.7;
-
-        // Noise buffer pool — reused per duration key to avoid per-collision alloc
+        // Noise buffer pool — reused per duration key
         this._noiseBuffers = new Map();
 
-        // Guard ALL speechSynthesis access — undefined on some Android WebViews
+        // Browser speechSynthesis fallback (Vite / desktop Chrome)
         this._hasSpeech = typeof window !== 'undefined'
             && 'speechSynthesis' in window
             && window.speechSynthesis != null;
 
-        // Pause audio + cancel speech when app is backgrounded (notifications, app switch)
+        // Pause audio + cancel speech when app is backgrounded
         this._handleVisibility = () => {
             if (document.hidden) {
+                this._stopNativeTTS();
                 if (this._hasSpeech) {
                     try { window.speechSynthesis.cancel(); } catch (e) {}
                 }
@@ -50,6 +62,25 @@ export default class AudioManager {
             }
         };
         document.addEventListener('visibilitychange', this._handleVisibility);
+    }
+
+    // ── Native TTS helpers ────────────────────────────────────────────────────
+
+    async _stopNativeTTS() {
+        if (_ttsReady && _nativeTTS) {
+            try { await _nativeTTS.stop(); } catch (e) {}
+        }
+    }
+
+    async _speakNative(text, rate = 1.0) {
+        await _nativeTTS.speak({
+            text,
+            lang:        'en-US',
+            rate,
+            pitch:       1.0,
+            volume:      1.0,
+            category:    'ambient',   // doesn't pause background music
+        });
     }
 
     // ── AudioContext bootstrap ────────────────────────────────────────────────
@@ -223,27 +254,29 @@ export default class AudioManager {
         this._milestonesHit.clear();
     }
 
-    // ── Speech synthesis ──────────────────────────────────────────────────────
-    //
-    // ANDROID FIX: The only reliable way to get TTS working on Android WebView
-    // is to NOT specify a voice at all and just set utt.lang = 'en-US'.
-    // The Android TTS engine picks the correct voice automatically.
-    // Specifying a voice (from getVoices()) causes silent failures because:
-    //   1. getVoices() returns [] until voiceschanged fires
-    //   2. Even after voiceschanged, voice objects may not be valid across
-    //      utterances in Capacitor's WebView
-    //
-    // We cancel any pending speech, create the utterance, and speak immediately.
-    // No setTimeout — delays cause the utterance to be cancelled by the next
-    // round starting before it fires.
+    // ── Speech — native TTS on Android, browser fallback on desktop ───────────
 
     speak(text) {
-        if (!this._hasSpeech) return;
         if (document.hidden) return;
+
+        if (_ttsReady && _nativeTTS) {
+            // Native path — works reliably in Capacitor WebView
+            this._speakNative(text, 0.9).catch(() => {
+                // Native failed — try browser fallback
+                this._speakBrowser(text);
+            });
+        } else {
+            // Browser path — Vite dev server / desktop Chrome
+            this._speakBrowser(text);
+        }
+    }
+
+    _speakBrowser(text) {
+        if (!this._hasSpeech) return;
         try {
             window.speechSynthesis.cancel();
             const utt  = new SpeechSynthesisUtterance(text);
-            utt.lang   = 'en-US';   // let OS pick the voice — works on all Android
+            utt.lang   = 'en-US';
             utt.rate   = 0.90;
             utt.pitch  = 1.0;
             utt.volume = 1.0;
@@ -252,18 +285,22 @@ export default class AudioManager {
     }
 
     speakCommentary(text) {
-        // Commentary is lower priority — skip if speech is already active
-        if (!this._hasSpeech) return;
         if (document.hidden) return;
-        try {
-            if (window.speechSynthesis.speaking) return;
-            const utt  = new SpeechSynthesisUtterance(text);
-            utt.lang   = 'en-US';
-            utt.rate   = 1.05;
-            utt.pitch  = 1.0;
-            utt.volume = 0.85;
-            window.speechSynthesis.speak(utt);
-        } catch (e) {}
+        if (_ttsReady && _nativeTTS) {
+            // Skip commentary if already speaking winner announcement
+            _nativeTTS.getSupportedLanguages?.()
+                .then(() => this._speakNative(text, 1.0))
+                .catch(() => {});
+        } else if (this._hasSpeech) {
+            try {
+                if (window.speechSynthesis.speaking) return;
+                const utt  = new SpeechSynthesisUtterance(text);
+                utt.lang   = 'en-US';
+                utt.rate   = 1.0;
+                utt.volume = 0.85;
+                window.speechSynthesis.speak(utt);
+            } catch (e) {}
+        }
     }
 
     setVolume(v) {
@@ -279,6 +316,7 @@ export default class AudioManager {
 
     destroy() {
         document.removeEventListener('visibilitychange', this._handleVisibility);
+        this._stopNativeTTS();
         if (this._hasSpeech) {
             try { window.speechSynthesis.cancel(); } catch (e) {}
         }
