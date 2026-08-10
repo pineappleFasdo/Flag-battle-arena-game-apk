@@ -1,212 +1,219 @@
 // LeaderboardRenderer.js
-// Redesigned to match "Qualified for Final" style from reference video:
-//  • Dark navy panel with glowing blue border
-//  • "QUALIFIED FOR FINAL" header with trophy icon
-//  • Shows 5 rows at a time: #rank | flag | country name | X win
-//  • Auto-pages through ALL winners every PAGE_INTERVAL ms so every
-//    country gets shown regardless of how long the leaderboard grows
-//  • Smooth slide-up transition between pages
-//  • Win count bumps with a gold flash animation
-//  • Truncation results cached to avoid per-frame measureText loops
+// "Qualified for Final" style leaderboard:
+//  • Dark navy panel, blue glow border
+//  • 5 rows per page, smooth cross-fade between pages (no jarring slide)
+//  • Staggered row fade-in when page changes — each row appears 80ms apart
+//  • New winner row flashes gold briefly then settles
+//  • Win count bumps with a clean scale+glow animation
+//  • Page switches every 6 seconds (was 3.5 — felt rushed)
+//  • Cross-fade takes 500ms (smooth, not instant)
 
 export default class LeaderboardRenderer {
 
     constructor() {
-        this._allRows     = [];   // full sorted leaderboard
-        this._bumps       = new Map();   // code → bump state
+        this._isFinalMode  = false;   // switches header to "LAST FLAG STANDING"
+        this._allRows      = [];
+        this._bumps        = new Map();   // code → bump state {startTime, duration, toValue}
+        this._newRows      = new Set();   // codes that just got their first win (flash gold)
         this._shimmerPhase = 0;
 
-        // Paging state
-        this._pageIndex      = 0;   // which page is currently displayed
-        this._pageTotal      = 1;   // total number of pages
-        this._slideStart     = 0;   // performance.now() when current slide began
-        this._sliding        = false;
-        this._slideFrom      = 0;   // page index we're sliding away from
-        this._slideTo        = 0;   // page index we're sliding toward
-        this._lastPageSwitch = 0;   // performance.now() of last auto-page
+        // Paging
+        this._pageIndex      = 0;
+        this._pageTotal      = 1;
+        this._lastPageSwitch = 0;
 
-        // Truncation cache: key → truncated string
+        // Cross-fade state
+        this._fading     = false;
+        this._fadeStart  = 0;
+        this._fadeDur    = 500;    // ms for cross-fade
+        this._fromPage   = 0;
+        this._toPage     = 0;
+
+        // Row stagger: when a new page fades in, each row staggers its opacity
+        this._staggerStart = 0;
+        this._staggerDur   = 80;   // ms between each row appearing
+
         this._truncCache = new Map();
     }
 
     reset() {
         this._allRows        = [];
         this._bumps          = new Map();
+        this._newRows        = new Set();
         this._pageIndex      = 0;
         this._pageTotal      = 1;
-        this._sliding        = false;
+        this._fading         = false;
         this._lastPageSwitch = 0;
         this._truncCache.clear();
     }
 
-    /** Called by WinnerManager after every win. rows = full sorted list, winCode = winner's code. */
+    setFinalMode(enabled) {
+        this._isFinalMode = enabled;
+    }
+
     markDirty(rows, winCode) {
-        // Record bump for the winning country
         if (winCode) {
             const existing = this._allRows.find(r => r.code === winCode);
-            const fromVal  = existing ? existing.wins : 0;
-            const toVal    = rows.find(r => r.code === winCode)?.wins ?? fromVal + 1;
+            if (!existing) {
+                // Brand new entry — will flash gold on first appearance
+                this._newRows.add(winCode);
+            }
             this._bumps.set(winCode, {
                 startTime : performance.now(),
-                duration  : 700,
-                fromValue : fromVal,
-                toValue   : toVal,
+                duration  : 900,
+                toValue   : rows.find(r => r.code === winCode)?.wins ?? 1,
             });
+
+            // Jump to the page that shows this winner
+            const idx = rows.findIndex(r => r.code === winCode);
+            if (idx >= 0) {
+                const winnerPage = Math.floor(idx / 5);
+                if (winnerPage !== this._pageIndex && !this._fading) {
+                    this._startFade(this._pageIndex, winnerPage, performance.now());
+                }
+            }
         }
 
-        // Update the full list
         this._allRows   = rows;
         this._pageTotal = Math.max(1, Math.ceil(rows.length / 5));
-        // Clamp page index in case list shrank
         if (this._pageIndex >= this._pageTotal) this._pageIndex = 0;
-
         this._truncCache.clear();
     }
 
-    // ── Main draw entry point ─────────────────────────────────────────────────
+    // ── Main draw ─────────────────────────────────────────────────────────────
 
-    draw(ctx, rows, x, y, w, rowH = 28, maxRows = 5) {
-        this._shimmerPhase = (performance.now() / 1200) % 1;
-        const n = 5;
+    draw(ctx, rows, x, y, w, rowH = 28) {
+        this._shimmerPhase = (performance.now() / 1400) % 1;
+        const now = performance.now();
+        const n   = 5;
 
-        // Sync allRows from external source if markDirty hasn't been called yet
         if (this._allRows.length === 0 && rows.length > 0) {
             this._allRows   = rows;
             this._pageTotal = Math.max(1, Math.ceil(rows.length / n));
         }
 
-        // ── Auto-paging ────────────────────────────────────────────────────
-        const now = performance.now();
-        if (!this._sliding && this._pageTotal > 1) {
-            const elapsed = now - this._lastPageSwitch;
+        // ── Auto-page every 6 seconds ──────────────────────────────────────
+        if (!this._fading && this._pageTotal > 1) {
             if (this._lastPageSwitch === 0) {
-                // First frame — initialise
                 this._lastPageSwitch = now;
-            } else if (elapsed > 3500) {
-                const nextPage = (this._pageIndex + 1) % this._pageTotal;
-                this._startSlide(this._pageIndex, nextPage, now);
+            } else if (now - this._lastPageSwitch > 6000) {
+                const next = (this._pageIndex + 1) % this._pageTotal;
+                this._startFade(this._pageIndex, next, now);
             }
         }
 
-        // ── Compute slide offset ───────────────────────────────────────────
-        let slideT      = 1;  // 0 = fully old page, 1 = fully new page
-        let displayPage = this._pageIndex;
-
-        if (this._sliding) {
-            slideT = Math.min(1, (now - this._slideStart) / 400);
-            slideT = this._easeOut(slideT);
-            if (slideT >= 1) {
-                this._pageIndex      = this._slideTo;
-                displayPage          = this._pageIndex;
-                this._sliding        = false;
+        // ── Resolve cross-fade ─────────────────────────────────────────────
+        let fadeT = 1;
+        if (this._fading) {
+            fadeT = Math.min(1, (now - this._fadeStart) / this._fadeDur);
+            fadeT = this._easeInOut(fadeT);
+            if (fadeT >= 1) {
+                this._pageIndex      = this._toPage;
+                this._fading         = false;
                 this._lastPageSwitch = now;
-                slideT               = 1;
-            } else {
-                displayPage = this._slideFrom;
+                this._staggerStart   = now;
+                fadeT                = 1;
             }
         }
 
         // ── Dimensions ────────────────────────────────────────────────────
-        const headerH  = Math.max(18, Math.round(rowH * 0.70));
-        const totalH   = headerH + n * rowH;
-
-        const padL   = Math.max(6,  Math.round(rowH * 0.28));
-        const padR   = Math.max(6,  Math.round(rowH * 0.28));
-        const flagW  = Math.round(rowH * 1.55);
-        const flagH  = Math.round(rowH * 0.72);
-        const rankW  = Math.round(rowH * 1.10);   // wider to fit 3-digit ranks (#249)
-        const fSize  = Math.max(10, Math.round(rowH * 0.44));
-        const winsW  = Math.round(w * 0.20);
+        const headerH = Math.round(rowH * 0.75);
+        const totalH  = headerH + n * rowH;
+        const padL    = Math.round(rowH * 0.30);
+        const padR    = Math.round(rowH * 0.30);
+        const flagW   = Math.round(rowH * 1.60);
+        const flagH   = Math.round(rowH * 0.74);
+        const rankW   = Math.round(rowH * 1.15);
+        const fSize   = Math.max(10, Math.round(rowH * 0.44));
+        const winsW   = Math.round(w * 0.22);
 
         ctx.save();
 
-        // ── Background panel ──────────────────────────────────────────────
-        // Dark navy, matching reference video
-        ctx.fillStyle = 'rgba(4, 8, 28, 0.94)';
-        this._rrect(ctx, x, y, w, totalH, 8);
+        // ── Panel background ───────────────────────────────────────────────
+        ctx.fillStyle = 'rgba(3, 6, 24, 0.96)';
+        this._rrect(ctx, x, y, w, totalH, 10);
         ctx.fill();
 
-        // Blue glowing border (double stroke = glow effect)
-        ctx.shadowColor = 'rgba(60,140,255,0.70)';
-        ctx.shadowBlur  = 10;
-        ctx.strokeStyle = 'rgba(60,140,255,0.90)';
-        ctx.lineWidth   = 1.8;
-        this._rrect(ctx, x, y, w, totalH, 8);
+        // Outer glow border
+        ctx.shadowColor = 'rgba(40,120,255,0.55)';
+        ctx.shadowBlur  = 14;
+        ctx.strokeStyle = 'rgba(50,130,255,0.85)';
+        ctx.lineWidth   = 1.5;
+        this._rrect(ctx, x, y, w, totalH, 10);
         ctx.stroke();
-        ctx.shadowBlur  = 0;
+        ctx.shadowBlur = 0;
 
-        // ── Header ────────────────────────────────────────────────────────
-        // Subtle dark blue gradient header band
-        const hGrad = ctx.createLinearGradient(x, y, x, y + headerH);
-        hGrad.addColorStop(0, 'rgba(20, 50, 130, 0.85)');
-        hGrad.addColorStop(1, 'rgba(10, 25,  80, 0.85)');
-        ctx.fillStyle = hGrad;
-        this._rrect(ctx, x, y, w, headerH, [8, 8, 0, 0]);
+        // ── Header band ───────────────────────────────────────────────────
+        const hg = ctx.createLinearGradient(x, y, x, y + headerH);
+        hg.addColorStop(0, 'rgba(15, 42, 120, 0.92)');
+        hg.addColorStop(1, 'rgba(8,  22,  70, 0.92)');
+        ctx.fillStyle = hg;
+        this._rrect(ctx, x, y, w, headerH, [10, 10, 0, 0]);
         ctx.fill();
 
-        // Thin separator line below header
-        ctx.strokeStyle = 'rgba(60,140,255,0.45)';
+        // Header separator
+        ctx.strokeStyle = 'rgba(60,140,255,0.35)';
         ctx.lineWidth   = 0.8;
         ctx.beginPath();
-        ctx.moveTo(x + 8, y + headerH);
-        ctx.lineTo(x + w - 8, y + headerH);
+        ctx.moveTo(x + 10, y + headerH);
+        ctx.lineTo(x + w - 10, y + headerH);
         ctx.stroke();
 
         // Header text
-        ctx.fillStyle    = 'rgba(210, 230, 255, 0.95)';
-        ctx.font         = `800 ${Math.max(9, Math.round(headerH * 0.52))}px system-ui, Arial, sans-serif`;
+        const hFontSize = Math.max(9, Math.round(headerH * 0.50));
+        ctx.fillStyle    = 'rgba(200, 225, 255, 0.95)';
+        ctx.font         = `800 ${hFontSize}px system-ui, Arial, sans-serif`;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('🏆  QUALIFIED FOR FINAL', x + w / 2, y + headerH / 2);
+        ctx.fillText(this._isFinalMode ? '🏆  LAST FLAG STANDING' : '🏆  QUALIFIED FOR FINAL', x + w / 2, y + headerH / 2);
 
-        // ── Rows with optional slide clip ─────────────────────────────────
+        // ── Rows area ─────────────────────────────────────────────────────
         const rowsY = y + headerH;
         const rowsH = n * rowH;
 
-        // Clip rows area so slide animation doesn't bleed outside the panel
         ctx.save();
         ctx.beginPath();
         ctx.rect(x, rowsY, w, rowsH);
         ctx.clip();
 
-        if (this._sliding && slideT < 1) {
-            // Slide current page out (upward) and new page in (from below)
-            const offset = rowsH * (1 - slideT);   // slides from bottom to 0
-
-            // Old page sliding up and fading
+        if (this._fading && fadeT < 1) {
+            // Cross-fade: old page fades out, new page fades in simultaneously
             ctx.save();
-            ctx.globalAlpha = 1 - slideT;
-            ctx.translate(0, -offset);
-            this._drawPage(ctx, displayPage, x, rowsY, w, rowH, n, padL, padR, flagW, flagH, rankW, fSize, winsW, rowsH);
+            ctx.globalAlpha = 1 - fadeT;
+            this._drawPage(ctx, this._fromPage, x, rowsY, w, rowH, n,
+                padL, padR, flagW, flagH, rankW, fSize, winsW, 1, now);
             ctx.restore();
 
-            // New page sliding in from below
             ctx.save();
-            ctx.globalAlpha = slideT;
-            ctx.translate(0, rowsH - offset);
-            this._drawPage(ctx, this._slideTo, x, rowsY, w, rowH, n, padL, padR, flagW, flagH, rankW, fSize, winsW, rowsH);
+            ctx.globalAlpha = fadeT;
+            this._drawPage(ctx, this._toPage, x, rowsY, w, rowH, n,
+                padL, padR, flagW, flagH, rankW, fSize, winsW, 1, now);
             ctx.restore();
         } else {
-            this._drawPage(ctx, this._pageIndex, x, rowsY, w, rowH, n, padL, padR, flagW, flagH, rankW, fSize, winsW, rowsH);
+            // Staggered row reveal after page settles
+            const staggerElapsed = now - this._staggerStart;
+            this._drawPage(ctx, this._pageIndex, x, rowsY, w, rowH, n,
+                padL, padR, flagW, flagH, rankW, fSize, winsW,
+                staggerElapsed, now);
         }
 
-        ctx.restore(); // remove clip
+        ctx.restore(); // clip
 
-        // ── Page dots ─────────────────────────────────────────────────────
-        // Small dots at the bottom right to show current page position
-        if (this._pageTotal > 1 && this._pageTotal <= 12) {
-            const dotR  = Math.max(2, Math.round(rowH * 0.09));
-            const dotGap = dotR * 3;
-            const dotsW  = (this._pageTotal - 1) * dotGap + dotR * 2;
-            let dotX = x + w - padR - dotsW;
-            const dotY = rowsY + rowsH - dotR - 3;
+        // ── Page indicator dots ────────────────────────────────────────────
+        if (this._pageTotal > 1 && this._pageTotal <= 15) {
+            const dotR   = Math.max(2.5, Math.round(rowH * 0.10));
+            const dotGap = dotR * 2.8;
+            const totalDotsW = (this._pageTotal - 1) * dotGap + dotR * 2;
+            let dotX = x + (w - totalDotsW) / 2;   // centred
+            const dotY = rowsY + rowsH - dotR - 4;
 
             for (let p = 0; p < this._pageTotal; p++) {
+                const active = p === (this._fading ? this._toPage : this._pageIndex);
                 ctx.beginPath();
-                ctx.arc(dotX + dotR, dotY, dotR, 0, Math.PI * 2);
-                ctx.fillStyle = p === this._pageIndex
-                    ? 'rgba(100,180,255,0.95)'
-                    : 'rgba(100,180,255,0.28)';
+                ctx.arc(dotX + dotR, dotY, active ? dotR * 1.3 : dotR, 0, Math.PI * 2);
+                ctx.fillStyle = active
+                    ? 'rgba(100,180,255,1.0)'
+                    : 'rgba(100,180,255,0.25)';
                 ctx.fill();
                 dotX += dotGap;
             }
@@ -215,135 +222,163 @@ export default class LeaderboardRenderer {
         ctx.restore();
     }
 
-    // ── Draw one page of rows ─────────────────────────────────────────────────
+    // ── Draw one full page of rows ────────────────────────────────────────────
 
-    _drawPage(ctx, pageIdx, x, rowsY, w, rowH, n, padL, padR, flagW, flagH, rankW, fSize, winsW, rowsH) {
+    _drawPage(ctx, pageIdx, x, rowsY, w, rowH, n,
+              padL, padR, flagW, flagH, rankW, fSize, winsW,
+              staggerElapsed, now) {
+
         const start = pageIdx * n;
         for (let i = 0; i < n; i++) {
-            const globalRank = start + i;   // 0-based rank across all entries
-            const entry = this._allRows[globalRank] ?? null;
+            const globalRank = start + i;
+            const entry      = this._allRows[globalRank] ?? null;
+
+            // Staggered opacity: each row appears 80ms after the previous
+            const rowStaggerMs = i * 80;
+            const rowAlpha = staggerElapsed >= 99999
+                ? 1   // fully visible (passed 1 = no stagger active)
+                : Math.min(1, Math.max(0, (staggerElapsed - rowStaggerMs) / 160));
+
+            ctx.save();
+            ctx.globalAlpha *= rowAlpha;
             this._drawRow(ctx, entry, globalRank, i, x, rowsY + i * rowH, w, rowH,
-                padL, padR, flagW, flagH, rankW, fSize, winsW, n);
+                padL, padR, flagW, flagH, rankW, fSize, winsW, n, now);
+            ctx.restore();
         }
     }
 
     // ── Draw one row ──────────────────────────────────────────────────────────
 
     _drawRow(ctx, entry, globalRank, rowI, x, ry, w, rowH,
-             padL, padR, flagW, flagH, rankW, fSize, winsW, n) {
+             padL, padR, flagW, flagH, rankW, fSize, winsW, n, now) {
 
         const midY = ry + rowH / 2;
 
-        // Row background — alternating very subtle stripe, all dark
-        const isEven = (globalRank % 2) === 0;
-        ctx.fillStyle = isEven
-            ? 'rgba(255,255,255,0.04)'
-            : 'rgba(0,0,0,0.0)';
+        // Alternating row stripe
+        ctx.fillStyle = (globalRank % 2 === 0)
+            ? 'rgba(255,255,255,0.03)'
+            : 'rgba(0,0,0,0)';
         ctx.fillRect(x, ry, w, rowH);
 
-        // Rank number — bold white, e.g. "#1", "#249"
-        const rankLabel = `#${globalRank + 1}`;
-        ctx.fillStyle    = 'rgba(180,210,255,0.85)';
+        // New-winner gold flash on the row background
+        if (entry && this._newRows.has(entry.code)) {
+            const bump = this._bumps.get(entry.code);
+            if (bump) {
+                const t = Math.min(1, (now - bump.startTime) / bump.duration);
+                if (t < 1) {
+                    // Bright gold flash that fades out
+                    const flashAlpha = Math.max(0, 0.22 * (1 - t));
+                    ctx.fillStyle = `rgba(255,210,50,${flashAlpha})`;
+                    ctx.fillRect(x, ry, w, rowH);
+                } else {
+                    this._newRows.delete(entry.code);
+                }
+            }
+        }
+
+        // Rank label
+        const rankLabel = entry ? `#${globalRank + 1}` : `#${globalRank + 1}`;
+        ctx.fillStyle    = 'rgba(160,200,255,0.75)';
         ctx.font         = `700 ${fSize}px system-ui, Arial, sans-serif`;
         ctx.textAlign    = 'right';
         ctx.textBaseline = 'middle';
         ctx.fillText(rankLabel, x + padL + rankW, midY);
 
-        if (!entry) {
-            // Empty slot placeholder
-            const dashColor = 'rgba(255,255,255,0.15)';
-            const flagX = x + padL + rankW + 8;
-            const flagY = ry + (rowH - flagH) / 2;
+        const flagX = x + padL + rankW + 7;
+        const flagY = ry + (rowH - flagH) / 2;
 
+        if (!entry) {
+            // Empty slot
             ctx.save();
             this._rrect(ctx, flagX, flagY, flagW, flagH, 2);
-            ctx.fillStyle = 'rgba(30,40,70,0.5)';
+            ctx.fillStyle = 'rgba(20,30,60,0.5)';
             ctx.fill();
             ctx.restore();
-
-            ctx.fillStyle    = dashColor;
-            ctx.font         = `${fSize}px system-ui, Arial, sans-serif`;
-            ctx.textAlign    = 'left';
+            ctx.fillStyle = 'rgba(255,255,255,0.12)';
+            ctx.font      = `${fSize}px system-ui, Arial, sans-serif`;
+            ctx.textAlign = 'left';
             ctx.fillText('—', flagX + flagW + 8, midY);
-
             if (rowI < n - 1) this._divider(ctx, x, ry, w, rowH, padL, padR);
             return;
         }
 
         // Flag
-        const flagX = x + padL + rankW + 8;
-        const flagY = ry + (rowH - flagH) / 2;
         this._drawFlag(ctx, entry.image, flagX, flagY, flagW, flagH);
 
         // Country name
         const nameX    = flagX + flagW + 8;
         const nameMaxW = w - (nameX - x) - winsW - padR - 4;
         const nameFont = `600 ${fSize}px system-ui, Arial, sans-serif`;
-
-        ctx.fillStyle    = 'rgba(220, 235, 255, 0.95)';
+        ctx.fillStyle    = 'rgba(220,235,255,0.95)';
         ctx.font         = nameFont;
         ctx.textAlign    = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(this._truncateCached(ctx, entry.name, nameMaxW, nameFont), nameX, midY);
+        ctx.fillText(
+            this._truncateCached(ctx, entry.name, nameMaxW, nameFont),
+            nameX, midY
+        );
 
-        // Wins count
-        this._drawWins(ctx, entry, x + w - padR, midY, fSize);
+        // Wins
+        this._drawWins(ctx, entry, x + w - padR, midY, fSize, now);
 
-        // Row divider
         if (rowI < n - 1) this._divider(ctx, x, ry, w, rowH, padL, padR);
     }
 
     // ── Win count cell ────────────────────────────────────────────────────────
 
-    _drawWins(ctx, entry, rightEdge, midY, fSize) {
-        const now  = performance.now();
+    _drawWins(ctx, entry, rightEdge, midY, fSize, now) {
         const bump = this._bumps.get(entry.code);
 
-        let displayWins = entry.wins;
-        let scale       = 1;
-        let color       = '#FFC933';  // gold — matches reference video
+        let wins  = entry.wins;
+        let scale = 1;
+        let color = '#FFB800';   // warm gold
 
         if (bump) {
-            const elapsed  = now - bump.startTime;
-            const progress = Math.min(1, elapsed / bump.duration);
-            displayWins = bump.toValue;
+            const t = Math.min(1, (now - bump.startTime) / bump.duration);
+            wins    = bump.toValue;
 
-            if (progress < 1) {
-                const peakT = 0.28;
-                scale = progress < peakT
-                    ? 1 + 0.38 * (progress / peakT)
-                    : 1.38 - 0.38 * this._easeOut((progress - peakT) / (1 - peakT));
-                const flash = Math.max(0, 1 - progress * 2.2);
-                color = `rgb(255, ${Math.round(200 + 55 * flash)}, ${Math.round(51 * (1 - flash))})`;
+            if (t < 1) {
+                // Scale up sharply then ease back down — peak at t=0.2
+                const peak = 0.20;
+                scale = t < peak
+                    ? 1 + 0.55 * (t / peak)
+                    : 1 + 0.55 * this._easeOut(1 - (t - peak) / (1 - peak));
+                scale = Math.max(1, scale);
+
+                // Orange-white flash that cools to gold
+                const flash = Math.max(0, 1 - t * 1.8);
+                const r     = 255;
+                const g     = Math.round(184 + 71 * flash);
+                const b     = Math.round(0   + 255 * flash * 0.5);
+                color       = `rgb(${r},${g},${b})`;
             } else {
                 this._bumps.delete(entry.code);
             }
         }
 
-        // "1 win" / "5 wins" — same format as reference video
-        const label    = `${displayWins} ${displayWins === 1 ? 'win' : 'wins'}`;
-        const textSize = Math.round(fSize * scale);
+        const label = `${wins} ${wins === 1 ? 'win' : 'wins'}`;
 
         ctx.save();
-        ctx.font         = `800 ${textSize}px system-ui, Arial, sans-serif`;
+        ctx.font         = `800 ${Math.round(fSize * scale)}px system-ui, Arial, sans-serif`;
         ctx.fillStyle    = color;
         ctx.textAlign    = 'right';
         ctx.textBaseline = 'middle';
-        if (scale > 1.05) {
-            ctx.shadowColor = 'rgba(255,210,60,0.55)';
-            ctx.shadowBlur  = 8;
+
+        if (scale > 1.1) {
+            ctx.shadowColor = 'rgba(255,190,0,0.70)';
+            ctx.shadowBlur  = 10;
         }
         ctx.fillText(label, rightEdge, midY);
         ctx.restore();
     }
 
-    // ── Flag drawing ──────────────────────────────────────────────────────────
+    // ── Flag ──────────────────────────────────────────────────────────────────
 
     _drawFlag(ctx, img, fx, fy, fw, fh) {
         const ready = img && img.complete && img.naturalWidth > 0;
 
         ctx.save();
-        this._rrect(ctx, fx, fy, fw, fh, 2);
+        this._rrect(ctx, fx, fy, fw, fh, 3);
         ctx.clip();
 
         if (ready) {
@@ -351,37 +386,37 @@ export default class LeaderboardRenderer {
             ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(img, fx, fy, fw, fh);
         } else {
-            // Shimmer placeholder while image loads
-            const shimX = fx + (this._shimmerPhase * 2 - 0.5) * fw * 2;
-            const grad  = ctx.createLinearGradient(shimX - fw * 0.5, 0, shimX + fw * 0.5, 0);
-            grad.addColorStop(0,    'rgba(25, 35, 70, 0.9)');
-            grad.addColorStop(0.48, 'rgba(55, 72, 130, 0.9)');
-            grad.addColorStop(0.52, 'rgba(75, 95, 160, 0.95)');
-            grad.addColorStop(1,    'rgba(25, 35, 70, 0.9)');
+            // Shimmer skeleton while loading
+            const sx   = fx + (this._shimmerPhase * 2 - 0.5) * fw * 2;
+            const grad = ctx.createLinearGradient(sx - fw * 0.6, 0, sx + fw * 0.6, 0);
+            grad.addColorStop(0,    'rgba(20, 30, 65, 1)');
+            grad.addColorStop(0.45, 'rgba(45, 62, 120, 1)');
+            grad.addColorStop(0.55, 'rgba(65, 88, 155, 1)');
+            grad.addColorStop(1,    'rgba(20, 30, 65, 1)');
             ctx.fillStyle = grad;
             ctx.fillRect(fx, fy, fw, fh);
         }
         ctx.restore();
 
-        // Thin border on flag
-        ctx.strokeStyle = ready ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.07)';
-        ctx.lineWidth   = 0.7;
-        this._rrect(ctx, fx, fy, fw, fh, 2);
+        // Subtle border
+        ctx.strokeStyle = ready ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.05)';
+        ctx.lineWidth   = 0.6;
+        this._rrect(ctx, fx, fy, fw, fh, 3);
         ctx.stroke();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    _startSlide(fromPage, toPage, now) {
-        this._sliding    = true;
-        this._slideFrom  = fromPage;
-        this._slideTo    = toPage;
-        this._slideStart = now;
+    _startFade(fromPage, toPage, now) {
+        this._fading    = true;
+        this._fromPage  = fromPage;
+        this._toPage    = toPage;
+        this._fadeStart = now;
     }
 
     _divider(ctx, x, ry, w, rowH, padL, padR) {
-        ctx.strokeStyle = 'rgba(60,140,255,0.12)';
-        ctx.lineWidth   = 0.7;
+        ctx.strokeStyle = 'rgba(50,110,255,0.10)';
+        ctx.lineWidth   = 0.6;
         ctx.beginPath();
         ctx.moveTo(x + padL,     ry + rowH);
         ctx.lineTo(x + w - padR, ry + rowH);
@@ -391,18 +426,15 @@ export default class LeaderboardRenderer {
     _truncateCached(ctx, text, maxWidth, font) {
         const key = `${font}|${Math.round(maxWidth)}|${text}`;
         if (this._truncCache.has(key)) return this._truncCache.get(key);
-
-        let result;
-        if (ctx.measureText(text).width <= maxWidth) {
-            result = text;
-        } else {
+        let result = text;
+        if (ctx.measureText(text).width > maxWidth) {
             let t = text;
             while (t.length > 1 && ctx.measureText(t + '…').width > maxWidth) {
                 t = t.slice(0, -1);
             }
             result = t + '…';
         }
-        if (this._truncCache.size > 600) this._truncCache.clear();
+        if (this._truncCache.size > 500) this._truncCache.clear();
         this._truncCache.set(key, result);
         return result;
     }
@@ -412,22 +444,29 @@ export default class LeaderboardRenderer {
             ctx.beginPath();
             ctx.roundRect(x, y, w, h, r);
         } else {
-            const [tl = r, tr = r, br = r, bl = r] = Array.isArray(r)
-                ? r : [r, r, r, r];
+            const [tl = r, tr = r, br = r, bl = r] = Array.isArray(r) ? r : [r, r, r, r];
             ctx.beginPath();
             ctx.moveTo(x + tl, y);
             ctx.lineTo(x + w - tr, y);
-            ctx.quadraticCurveTo(x + w, y,     x + w, y + tr);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + tr);
             ctx.lineTo(x + w, y + h - br);
             ctx.quadraticCurveTo(x + w, y + h, x + w - br, y + h);
             ctx.lineTo(x + bl, y + h);
-            ctx.quadraticCurveTo(x, y + h,     x, y + h - bl);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - bl);
             ctx.lineTo(x, y + tl);
-            ctx.quadraticCurveTo(x, y,         x + tl, y);
+            ctx.quadraticCurveTo(x, y, x + tl, y);
             ctx.closePath();
         }
     }
 
+    // Smooth ease-in-out for cross-fade
+    _easeInOut(t) {
+        return t < 0.5
+            ? 4 * t * t * t
+            : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    // Ease-out for win bump scale
     _easeOut(t) {
         return 1 - Math.pow(1 - t, 3);
     }
