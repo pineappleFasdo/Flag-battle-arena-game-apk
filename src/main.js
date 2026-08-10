@@ -25,7 +25,6 @@ overlay.appendChild(startScreen);
 // ── Game ────────────────────────────────────────────────────────────────────
 const game = new Game(canvas);
 
-// FIX CRISP: pass devicePixelRatio so the canvas backing store is native resolution
 function resize() {
     const vp  = window.visualViewport;
     const dpr = window.devicePixelRatio || 1;
@@ -36,9 +35,7 @@ function resize() {
     const physicalW = Math.round(logicalW * dpr);
     const physicalH = Math.round(logicalH * dpr);
 
-    // Always call resize on first run (canvas starts at 0×0)
     if (canvas.width === physicalW && canvas.height === physicalH) return;
-
     game.resize(physicalW, physicalH, dpr);
 }
 
@@ -46,13 +43,9 @@ window.addEventListener('resize', resize);
 if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', resize);
 }
-
-// Resize first so canvas has valid dimensions before the loop starts
 resize();
 
-// ── Game loop (matches original: continuous rAF, paused while hidden) ────────
-// FIX VISIBILITY: pause the loop while the app is backgrounded so physics
-// time doesn't jump and audio doesn't pile up when the user returns.
+// ── Game loop ────────────────────────────────────────────────────────────────
 let isPaused = false;
 
 function loop() {
@@ -63,15 +56,14 @@ function loop() {
     requestAnimationFrame(loop);
 }
 
-document.addEventListener('visibilitychange', () => {
+document.addEventListener('visibilitychange', function () {
     if (document.hidden) {
         isPaused = true;
     } else {
-        setTimeout(() => { isPaused = false; }, 50);
+        setTimeout(function () { isPaused = false; }, 50);
     }
 });
 
-// Start the loop — same as the original game.loop() call
 requestAnimationFrame(loop);
 
 // ── Button Handler ───────────────────────────────────────────────────────────
@@ -82,6 +74,24 @@ document.getElementById('nr-start-btn').addEventListener('click', function () {
         game.startGame();
     }, 380);
 });
+
+// ── DEBUG shortcut: tap arena 5× fast → instant Final Mode ──────────────────
+// DELETE this block before public release.
+let _debugTaps  = 0;
+let _debugTimer = null;
+canvas.addEventListener('click', function () {
+    if (game.gameState !== 'PLAYING' && game.gameState !== 'COUNTDOWN') return;
+    _debugTaps++;
+    clearTimeout(_debugTimer);
+    _debugTimer = setTimeout(function () { _debugTaps = 0; }, 1500);
+    if (_debugTaps >= 5) {
+        _debugTaps = 0;
+        // Wind the session clock back past 40 minutes so next winner triggers Final Mode
+        game.sessionStartTime = Date.now() - game.QUALIFY_DURATION_MS - 1;
+        console.log('[DEBUG] Final Mode will trigger on next round winner');
+    }
+});
+// ── END DEBUG ────────────────────────────────────────────────────────────────
 
 // ── Capacitor plugins (non-blocking, safe to fail in browser) ───────────────
 function initCapacitor() {

@@ -760,33 +760,52 @@ export default class Game {
         ctx.shadowColor  = "rgba(0,0,0,0.95)";
         ctx.shadowBlur   = 14;
 
-        const evSize = Math.min(this._lw * 0.030, 24);
-        ctx.font = `700 ${evSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = this.isFinalMode ? "#00CFFF" : ev.color;
-        ctx.fillText(
-            this.isFinalMode
-                ? `🏆 GRAND FINAL · Round ${this._finalRoundNumber + 1}`
-                : `${ev.icon}  ${ev.name}`,
-            cx, cy - 110
-        );
+        // ── Row 1: "ROUND N" in big gold — matches reference image ─────────
+        const roundSize = Math.min(this._lw * 0.11, 72);
+        ctx.font      = `900 ${roundSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = this.isFinalMode ? "#00CFFF" : "#FFD700";
+        ctx.shadowColor = this.isFinalMode ? "rgba(40,200,255,0.7)" : "rgba(255,200,0,0.7)";
+        ctx.shadowBlur  = 20;
+        const roundLabel = this.isFinalMode
+            ? `🏆 FINAL ${this._finalRoundNumber + 1}`
+            : `ROUND ${this.roundNumber}`;
+        ctx.fillText(roundLabel, cx, cy - 95);
 
-        const labelSize = Math.min(this._lw * 0.028, 22);
-        ctx.font = `600 ${labelSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = "rgba(255,255,255,0.88)";
-        ctx.shadowBlur = 12;
-        ctx.fillText("STARTS IN", cx, cy - 72);
+        // ── Row 2: Event name prominently in event color ────────────────────
+        const evNameSize = Math.min(this._lw * 0.065, 44);
+        ctx.font      = `900 ${evNameSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = this.isFinalMode ? "rgba(140,220,255,0.95)" : ev.color;
+        ctx.shadowColor = this.isFinalMode
+            ? "rgba(40,180,255,0.6)"
+            : `${this._hexToRgba(ev.color, 0.6)}`;
+        ctx.shadowBlur = 18;
+        const evLabel = this.isFinalMode
+            ? `${this._finalists.length} Countries`
+            : `${ev.icon}  ${ev.name}`;
+        ctx.fillText(evLabel, cx, cy - 38);
 
+        // ── Row 3: Flag count ───────────────────────────────────────────────
+        const countSize = Math.min(this._lw * 0.038, 24);
+        ctx.font      = `700 ${countSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "rgba(255,255,255,0.70)";
+        ctx.shadowColor = "rgba(0,0,0,0.9)";
+        ctx.shadowBlur  = 8;
+        const flagCount = this.totalCountries;
+        ctx.fillText(`${flagCount} FLAGS`, cx, cy + 10);
+
+        // ── Countdown number ────────────────────────────────────────────────
         ctx.save();
-        ctx.translate(cx, cy + 20);
+        ctx.translate(cx, cy + 75);
         ctx.scale(numScale, numScale);
-        const numSize = Math.min(this._lw * 0.17, 140);
+        const numSize = Math.min(this._lw * 0.20, 120);
         ctx.font      = `900 ${numSize}px system-ui, Arial, sans-serif`;
         ctx.fillStyle = this.isFinalMode ? "#00CFFF" : "#FFD700";
         ctx.shadowColor = "rgba(0,0,0,0.90)";
         ctx.shadowBlur  = 24;
         ctx.fillText(String(this.restartCountdown), 0, 0);
-        ctx.shadowColor = this.isFinalMode ? "rgba(40,200,255,0.40)" : "rgba(255,215,0,0.40)";
-        ctx.shadowBlur  = 36;
+        // Second pass: outer glow
+        ctx.shadowColor = this.isFinalMode ? "rgba(40,200,255,0.45)" : "rgba(255,215,0,0.45)";
+        ctx.shadowBlur  = 44;
         ctx.fillText(String(this.restartCountdown), 0, 0);
         ctx.restore();
 
