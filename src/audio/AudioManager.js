@@ -9,6 +9,8 @@
 // breaks that chain and silently kills the utterance. Native TTS has no such
 // restriction — it talks directly to Android's TTS engine bypassing WebView.
 
+import { BGM, BGM_BASE } from './BgmConfig.js';
+
 let _nativeTTS = null;   // set once the plugin loads
 let _ttsReady  = false;
 
@@ -36,6 +38,7 @@ export default class AudioManager {
 
         this._milestonesHit = new Set();
         this.volume         = 0.7;
+        this._bgm           = null;  // HTMLAudioElement for looping BGM
 
         // Noise buffer pool — reused per duration key
         this._noiseBuffers = new Map();
@@ -55,9 +58,15 @@ export default class AudioManager {
                 if (this._ctx && this._ctx.state === 'running') {
                     try { this._ctx.suspend(); } catch (e) {}
                 }
+                if (this._bgm && !this._bgm.paused) {
+                    try { this._bgm.pause(); } catch (e) {}
+                }
             } else {
                 if (this._ctx && this._ctx.state === 'suspended') {
                     try { this._ctx.resume(); } catch (e) {}
+                }
+                if (this._bgm && this._bgm.paused) {
+                    try { this._bgm.play().catch(() => {}); } catch (e) {}
                 }
             }
         };
@@ -329,6 +338,58 @@ export default class AudioManager {
         }
     }
 
+    // ── Background music (HTMLAudioElement, loops until stopBGM) ─────────────
+    // Use playPhase('qualify' | 'elimination' | 'champion') — filenames in BgmConfig.js
+
+    playPhase(phase) {
+        const entry = BGM[phase];
+        if (!entry?.file) {
+            this.stopBGM();
+            return;
+        }
+        this.playBGM(BGM_BASE + entry.file, entry.volume ?? 0.18);
+    }
+
+    playBGM(src, volume = 0.18) {
+        this.stopBGM();
+        try {
+            const a = new Audio();
+            a.preload = 'auto';
+            a.loop = true;
+            a.setAttribute('loop', 'loop');
+            a.volume = Math.max(0, Math.min(1, volume));
+            // Fallback if native loop fails on some WebViews
+            a.addEventListener('ended', () => {
+                if (this._bgm === a) {
+                    try {
+                        a.currentTime = 0;
+                        a.play().catch(() => {});
+                    } catch (e) {}
+                }
+            });
+            a.src = src;
+            this._bgm = a;
+            const tryPlay = () => a.play().catch(() => {});
+            // Play when ready; also try immediately (user gesture path)
+            a.addEventListener('canplay', tryPlay, { once: true });
+            tryPlay();
+        } catch (e) {
+            this._bgm = null;
+        }
+    }
+
+    stopBGM() {
+        if (this._bgm) {
+            const a = this._bgm;
+            this._bgm = null;
+            try {
+                a.pause();
+                a.removeAttribute('src');
+                a.load();
+            } catch (e) {}
+        }
+    }
+
     setVolume(v) {
         this.volume = Math.max(0, Math.min(1, v));
         if (this._masterGain && this._ctx) {
@@ -338,10 +399,14 @@ export default class AudioManager {
                 );
             } catch (e) {}
         }
+        if (this._bgm) {
+            try { this._bgm.volume = Math.max(0, Math.min(1, v * 0.6)); } catch (e) {}
+        }
     }
 
     destroy() {
         document.removeEventListener('visibilitychange', this._handleVisibility);
+        this.stopBGM();
         this._stopNativeTTS();
         if (this._hasSpeech) {
             try { window.speechSynthesis.cancel(); } catch (e) {}

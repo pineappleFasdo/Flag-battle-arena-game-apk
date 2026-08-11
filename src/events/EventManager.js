@@ -8,6 +8,11 @@ import MagnetCoreEvent     from "./events/MagnetCoreEvent.js";
 import WindGustEvent       from "./events/WindGustEvent.js";
 import BouncyEvent         from "./events/BouncyEvent.js";
 import LastStandingEvent   from "./events/LastStandingEvent.js";
+import ReverseGravityEvent from "./events/ReverseGravityEvent.js";
+import BlackHoleEvent      from "./events/BlackHoleEvent.js";
+import SpinCycleEvent      from "./events/SpinCycleEvent.js";
+import BilliardBreakEvent  from "./events/BilliardBreakEvent.js";
+import PulsarEvent         from "./events/PulsarEvent.js";
 
 // Qualifying pool only — LAST STANDING is final-exclusive (not in rotation)
 const ALL_EVENTS = [
@@ -20,6 +25,11 @@ const ALL_EVENTS = [
     MagnetCoreEvent,
     WindGustEvent,
     BouncyEvent,
+    ReverseGravityEvent,
+    BlackHoleEvent,
+    SpinCycleEvent,
+    BilliardBreakEvent,
+    PulsarEvent,
 ];
 
 export default class EventManager {

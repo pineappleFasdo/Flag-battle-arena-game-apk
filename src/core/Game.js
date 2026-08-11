@@ -364,6 +364,7 @@ export default class Game {
         this._champCountdownRemain = this._champCountdownSec;
         this.gameState = "GRAND_CHAMPION";
 
+        this.audio.playPhase('champion');
         this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
         this.audio.playWinner();
         this.audio.speak(
@@ -401,6 +402,7 @@ export default class Game {
 
         this._finalTotalCount = this._finalists.length;
         this.leaderboardRenderer.setFinalMode(true);
+        this.audio.playPhase('elimination');
         this.audio.speak(`Qualifying is over! Grand Final begins with ${this._finalists.length} countries!`);
     }
 
@@ -507,6 +509,9 @@ export default class Game {
             this._initQualifyPool();
         }
 
+        // Qualification BGM — file set in src/audio/BgmConfig.js
+        this.audio.playPhase('qualify');
+
         this.trayLauncher.cancel();
         this._clearAllFlags();
         this.confetti.particles = [];
@@ -546,8 +551,11 @@ export default class Game {
         this.arena.introTimer    = 0;
         this.arena.introDuration = 99999;
         this.arena.gapSize       = 0;
-        // Lock gap to fixed small size every round (never widens over session)
-        if (!this.isFinalMode) {
+        // Lock gap fixed every round (never widens). Final = tiny gap for slow exits.
+        if (this.isFinalMode) {
+            this.arena.initialGapSize = 2;
+            this.arena.maxGapSize     = 2;
+        } else {
             this.arena.initialGapSize = 3;
             this.arena.maxGapSize     = 3;
         }
@@ -995,10 +1003,10 @@ export default class Game {
         this._elimFlashQueue = [];
         this._finalStalemateSince = 0;
 
-        // Fixed small gap — same as qualifying
-        this.arena.gapSize = 3;
-        this.arena.initialGapSize = 3;
-        this.arena.maxGapSize = 3;
+        // Fixed small gap in final — slow sequential exits, never grows
+        this.arena.gapSize = 2;
+        this.arena.initialGapSize = 2;
+        this.arena.maxGapSize = 2;
         this.arena.state = "PLAYING";
         this.arena.syncWalls();
     }
@@ -1038,6 +1046,7 @@ export default class Game {
 
         // Continuous rain of confetti from the top + celebration audio
         this.confetti.start(this._lw / 2, this._lh * 0.08, 220, { fromTop: true });
+        this.audio.playPhase('champion');
         this.audio.playWinner();
         this.audio.playClap();
         this.audio.playConfetti();
