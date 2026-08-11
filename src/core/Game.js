@@ -28,15 +28,24 @@ export default class Game {
         this.canvas = canvas;
         this.ctx    = canvas.getContext("2d");
 
-        this.flagLoader = new FlagLoader();
+        this.flagLoader   = new FlagLoader();
+        this.allCountries = countries;
 
-        // ── Country rotation ───────────────────────────────────────────────
-        this.allCountries   = countries;
-        this.roundSize      = 249;
-        this._recentBatches = [];
+        // Pre-load all flag images once
+        this.allCountries.forEach(c => {
+            if (!c.image) c.image = this.flagLoader.load(c.code);
+        });
 
-        this.activeCountries = this._pickNextBatch();
-        this.totalCountries  = this.activeCountries.length;
+        // ── Qualifying pool state ─────────────────────────────────────────
+        // Countries that have already won a qualifying round sit out.
+        // They are added back only when the pool runs dry.
+        this._qualifyPool     = [];   // countries that still haven't won
+        this._qualifyWinners  = [];   // countries that have won (sit out)
+        this._qualifyPoolInit = false;
+
+        this.activeCountries = [];
+        this.totalCountries  = 0;
+        this.roundSize       = 249;
 
         this.physics            = null;
         this.arena              = null;
@@ -67,24 +76,25 @@ export default class Game {
         this.winnerDisplayTime     = 0;
         this.winnerDisplayDuration = 3500;
 
-        // ── Qualifying session (40 minutes) ───────────────────────────────
+        // ── Qualifying session ────────────────────────────────────────────
         this.QUALIFY_DURATION_MS = 40 * 60 * 1000;
         this.sessionStartTime    = 0;
         this.roundNumber         = 0;
         this.isFinalMode         = false;
+        this._currentEventId     = null;
 
-        // ── Final mode state ───────────────────────────────────────────────
-        this._finalists          = [];
-        this._finalEliminated    = [];
-        this._finalRoundNumber   = 0;
-        this._finalTotalCount    = 0;
+        // ── Final mode ────────────────────────────────────────────────────
+        this._finalists         = [];
+        this._finalEliminated   = [];
+        this._finalRoundNumber  = 0;
+        this._finalTotalCount   = 0;
 
-        // ── Grand champion (game over) state ───────────────────────────────
-        this._grandChampion         = null;   // set when one finalist remains
-        this._champDisplayStart     = 0;
-        this._champCountdownSec     = 120;    // 2-minute restart countdown
-        this._champCountdownTimer   = null;
-        this._champCountdownRemain  = 120;
+        // ── Grand champion ────────────────────────────────────────────────
+        this._grandChampion        = null;
+        this._champDisplayStart    = 0;
+        this._champCountdownSec    = 120;
+        this._champCountdownTimer  = null;
+        this._champCountdownRemain = 120;
 
         this.nextEventTimer    = 0;
         this.nextEventDuration = 150;
@@ -105,54 +115,64 @@ export default class Game {
         this._spawnTotal     = 0;
         this._spawnPerFrame  = 12;
 
-        // ── Final-mode elimination: one-at-a-time pause cycle ─────────────
-        // When a flag exits in final mode:
-        //   1. gameState → "ELIM_SHOW"  (show card, audio plays)
-        //   2. After card duration → gameState → "NEXT_EVENT" (arena rebuilds)
-        //   3. If ≥2 flags left → COUNTDOWN → PLAYING again
-        //   4. If 1 flag left   → show GRAND_CHAMPION screen forever
-        this._elimShowCountry  = null;   // country being shown on ELIM_SHOW
-        this._elimShowStart    = 0;      // timestamp when ELIM_SHOW began
-        this._elimShowDuration = 2800;   // ms to hold the card before rebuild
+        // ── Final-mode elimination card ───────────────────────────────────
+        this._elimShowCountry  = null;
+        this._elimShowStart    = 0;
+        this._elimShowDuration = 2800;
     }
 
     get _lw() { return this._logicalW || this.canvas.width; }
     get _lh() { return this._logicalH || this.canvas.height; }
 
-    // ── Random batch with less-repeat ──────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // QUALIFYING POOL LOGIC
+    // Countries that win a round are removed from the pool so they never
+    // participate in qualifying again. When the pool is exhausted, it refills
+    // from the bench (all countries that won, shuffled) so rounds can continue.
+    // ─────────────────────────────────────────────────────────────────────────
 
-    _pickNextBatch() {
-        const pool = this.allCountries;
-        const size = Math.min(this.roundSize, pool.length);
+    _initQualifyPool() {
+        this._qualifyPool    = this._shuffle([...this.allCountries]);
+        this._qualifyWinners = [];
+        this._qualifyPoolInit = true;
+    }
 
-        const recent = new Set(this._recentBatches.flat());
-        const fresh = [], used = [];
-        for (const c of pool) {
-            if (recent.has(c.code)) used.push(c); else fresh.push(c);
+    _shuffle(arr) {
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
+    }
+
+    /** Remove the winning country from the qualifying pool. */
+    _removeWinnerFromPool(countryCode) {
+        const idx = this._qualifyPool.findIndex(c => c.code === countryCode);
+        if (idx !== -1) {
+            const [won] = this._qualifyPool.splice(idx, 1);
+            this._qualifyWinners.push(won);
+        }
+    }
+
+    /**
+     * Pick the next batch of countries for a qualifying round.
+     * Takes up to `roundSize` from the front of the shuffled pool.
+     * If fewer than 2 are left, refills from winners so rounds can continue.
+     */
+    _pickQualifyBatch() {
+        // Refill if pool is running low
+        if (this._qualifyPool.length < 2) {
+            // All countries now have wins — shuffle winners back in
+            this._qualifyPool = this._shuffle([...this._qualifyWinners, ...this._qualifyPool]);
+            this._qualifyWinners = [];
         }
 
-        const shuffle = (arr) => {
-            for (let i = arr.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [arr[i], arr[j]] = [arr[j], arr[i]];
-            }
-            return arr;
-        };
-
-        shuffle(fresh); shuffle(used);
-        const batch = fresh.slice(0, size);
-        if (batch.length < size) batch.push(...used.slice(0, size - batch.length));
-
-        batch.forEach(c => { if (!c.image) c.image = this.flagLoader.load(c.code); });
-
-        const codes = batch.map(c => c.code);
-        this._recentBatches.push(codes);
-        if (this._recentBatches.length > 2) this._recentBatches.shift();
-
+        const size  = Math.min(this.roundSize, this._qualifyPool.length);
+        const batch = this._qualifyPool.slice(0, size);
         return batch;
     }
 
-    // ── Resize ─────────────────────────────────────────────────────────────
+    // ── Resize ───────────────────────────────────────────────────────────────
 
     resize(width, height, dpr = 1) {
         this._dpr = dpr;
@@ -171,7 +191,6 @@ export default class Game {
 
         this.physics = new PhysicsWorld(lw, lh);
         Matter.Events.on(this.physics.engine, "collisionStart", (event) => {
-
             const isPlaying   = this.gameState === "PLAYING";
             const isCountdown = this.gameState === "COUNTDOWN";
             if (!isPlaying && !isCountdown) return;
@@ -210,15 +229,6 @@ export default class Game {
         this.eliminationManager = new EliminationManager(this.arena, this.physics.world);
         this.flagManager        = new FlagManager(this.physics.world);
 
-        const spawnRadius = this.layout.arenaRadius - 20;
-        const { positions, spacing } = SpawnManager.generate(
-            this.layout.arenaX, this.layout.arenaY, spawnRadius, this.totalCountries
-        );
-
-        this._nextSpawnPositions = positions;
-        this._nextFlagW = Math.max(6, spacing * 0.82);
-        this._nextFlagH = Math.max(4, this._nextFlagW * 0.70);
-
         this.eventManager.pick();
 
         this.winnerManager.onWin = (winner) => this.handleWinner(winner);
@@ -229,13 +239,28 @@ export default class Game {
         }
     }
 
-    // ── Winner handling (qualifying rounds) ───────────────────────────────
+    // ── Entry point from home screen ─────────────────────────────────────────
+
+    /**
+     * Called by main.js when the player taps an event card.
+     * eventId matches the id defined in SELECTION_EVENTS in main.js.
+     */
+    startEvent(eventId) {
+        this._currentEventId = eventId;
+        this._doReset();
+    }
+
+    /** Legacy: called if something still calls startGame() */
+    startGame() {
+        this.startEvent('qualifier_40');
+    }
+
+    // ── Winner handling (qualifying) ──────────────────────────────────────────
 
     handleWinner(winner) {
         if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
 
-        // In final mode, winner detection is handled per-elimination in update().
-        // This callback only fires for qualifying rounds.
+        // Final mode winner detection is handled in _handleFinalElimination()
         if (this.isFinalMode) return;
 
         this.gameState         = "WINNER_SHOW";
@@ -254,9 +279,13 @@ export default class Game {
             this.confetti.start(this._lw / 2, this._lh * 0.36, 150);
             this.audio.playWinner();
             this.audio.speak(`${winner.country.name} wins!`);
+
+            // ── KEY FIX: remove winner from qualifying pool ───────────────
+            // That country won't appear in any future qualifying round.
+            this._removeWinnerFromPool(winner.country.code);
         }
 
-        // Check if qualifying time is up → switch to final mode
+        // Check if 40 minutes are up → go to Final Mode
         if (this.sessionStartTime > 0) {
             const elapsed = Date.now() - this.sessionStartTime;
             if (elapsed >= this.QUALIFY_DURATION_MS) {
@@ -270,7 +299,7 @@ export default class Game {
         this.restartTimer = setTimeout(() => this._beginNextEvent(), displayDuration);
     }
 
-    // ── Enter Final Mode ───────────────────────────────────────────────────
+    // ── Final Mode ────────────────────────────────────────────────────────────
 
     _enterFinalMode() {
         this.isFinalMode       = true;
@@ -293,19 +322,19 @@ export default class Game {
         this.audio.speak(`Qualifying is over! Grand Final begins with ${this._finalists.length} countries!`);
     }
 
-    // ── Begin next event (NEXT_EVENT → tray animation) ────────────────────
+    // ── Begin next event (qualifying or final) ────────────────────────────────
 
     _beginNextEvent() {
         this.gameState      = "NEXT_EVENT";
         this.nextEventTimer = 0;
 
         if (this.isFinalMode) {
+            // Final mode: arena has remaining finalists only
             this.activeCountries = this._finalists.map(f => f.country);
-            this.activeCountries.forEach(c => {
-                if (!c.image) c.image = this.flagLoader.load(c.code);
-            });
         } else {
-            this.activeCountries = this._pickNextBatch();
+            // Qualifying mode: take next batch from pool
+            // (winners have already been removed from the pool by handleWinner)
+            this.activeCountries = this._pickQualifyBatch();
         }
 
         this.totalCountries = this.activeCountries.length;
@@ -336,9 +365,7 @@ export default class Game {
         this.nextEventDuration = 130;
     }
 
-    // ── Start game / reset ─────────────────────────────────────────────────
-
-    startGame() { this._doReset(); }
+    // ── Reset ─────────────────────────────────────────────────────────────────
 
     _doReset() {
         if (this.restartTimer) {
@@ -355,10 +382,12 @@ export default class Game {
             this.eventManager.end(this._eventCtx());
         }
 
+        // Wipe leaderboard and wins for a fresh session
         this.winnerManager.clearWins();
         this.winnerManager.winner = null;
         this.leaderboardRenderer.reset();
 
+        // Reset session state
         this.sessionStartTime  = Date.now();
         this.roundNumber       = 0;
         this.isFinalMode       = false;
@@ -368,17 +397,19 @@ export default class Game {
         this._finalTotalCount  = 0;
         this._grandChampion    = null;
         this._champCountdownRemain = this._champCountdownSec;
+        this._elimShowCountry  = null;
 
-        this._elimShowCountry = null;
+        // Fresh qualifying pool — all countries eligible again
+        this._initQualifyPool();
 
         this.trayLauncher.cancel();
         this._clearAllFlags();
-
         this.confetti.particles = [];
         this.fx.reset();
         this.nextEventTimer = 0;
 
-        this.activeCountries = this._pickNextBatch();
+        // Pick first batch
+        this.activeCountries = this._pickQualifyBatch();
         this.totalCountries  = this.activeCountries.length;
 
         const spawnRadius = this.layout.arenaRadius - 20;
@@ -393,7 +424,7 @@ export default class Game {
         this._beginNextEvent();
     }
 
-    // ── Countdown ─────────────────────────────────────────────────────────
+    // ── Countdown ─────────────────────────────────────────────────────────────
 
     _beginCountdown() {
         this.gameState           = "COUNTDOWN";
@@ -401,11 +432,11 @@ export default class Game {
         this._countdownTickStart = performance.now();
         this.roundNumber++;
 
-        this.arena.radius     = this.layout.arenaRadius;
-        this.arena.state      = "INTRO";
-        this.arena.introTimer = 0;
+        this.arena.radius        = this.layout.arenaRadius;
+        this.arena.state         = "INTRO";
+        this.arena.introTimer    = 0;
         this.arena.introDuration = 99999;
-        this.arena.gapSize    = 0;
+        this.arena.gapSize       = 0;
         this.arena.syncWalls();
 
         this.winnerManager.reset();
@@ -415,7 +446,6 @@ export default class Game {
         this._spawnFlagH     = this._nextFlagH;
         this._spawnIndex     = 0;
         this._spawnTotal     = Math.min(this.totalCountries, this._spawnPositions?.length ?? 0);
-        this._spawnPerFrame  = 12;
 
         this.arena.setTotalFlags(this.totalCountries);
         this.arena.setRemainingFlags(this.totalCountries);
@@ -440,7 +470,7 @@ export default class Game {
             if (this.restartCountdown <= 0) {
                 clearInterval(this.restartTimer);
                 this.restartTimer = null;
-
+                // Spawn any remaining flags instantly
                 while (this._spawnIndex < this._spawnTotal) {
                     this.flagManager.addFlag(
                         this.activeCountries[this._spawnIndex],
@@ -466,7 +496,6 @@ export default class Game {
         this.arena.syncWalls();
         this.audio.playRoundStart();
         this.eventManager.start(this._eventCtx());
-
         if (this.isFinalMode) this._finalRoundNumber++;
     }
 
@@ -491,24 +520,21 @@ export default class Game {
         };
     }
 
-    // ── Update ─────────────────────────────────────────────────────────────
+    // ── Update ────────────────────────────────────────────────────────────────
 
     update() {
-        if (this.gameState === "START_SCREEN")    return;
-        if (this.gameState === "GRAND_CHAMPION")  return;  // frozen — confetti only
+        if (this.gameState === "START_SCREEN")   return;
+        if (this.gameState === "GRAND_CHAMPION") return;
+
         if (this.gameState === "ELIM_SHOW") {
-            // Wait for the card duration then trigger arena rebuild
             const elapsed = Date.now() - this._elimShowStart;
-            if (elapsed >= this._elimShowDuration) {
-                this._afterElimShow();
-            }
+            if (elapsed >= this._elimShowDuration) this._afterElimShow();
             this.confetti.update();
             this.fx.update();
             return;
         }
 
         const state = this.gameState;
-
         this._frame = (this._frame || 0) + 1;
         const evenFrame = (this._frame % 2) === 0;
 
@@ -562,94 +588,98 @@ export default class Game {
                     this.drain.applyDrainForce(this.flagManager.flags);
                 }
 
-                // ── Final mode: handle eliminations one at a time ─────────────
+                // Final mode: pause after every elimination
                 if (this.isFinalMode && countAfter < countBefore) {
                     this._handleFinalElimination();
-                    return; // stop further updates this frame
+                    return;
                 }
             }
 
-            // Qualifying mode: normal winner detection
+            // Qualifying: normal winner detection
             if (!this.isFinalMode && evenFrame) {
                 this.winnerManager.update(this.flagManager, this.eliminationManager);
             }
         }
 
-        // ── WINNER_SHOW: just confetti + fx ───────────────────────────────
         this.confetti.update();
         this.fx.update();
     }
 
-    // ── Final-mode: triggered the moment a flag exits ─────────────────────
+    // ── Final mode elimination ────────────────────────────────────────────────
 
     _handleFinalElimination() {
-        // Immediately close the arena (stop physics action)
         this.eventManager.end(this._eventCtx());
 
-        // Find who was just eliminated (last entry in eliminated list)
         const eliminated = this.eliminationManager.eliminated;
         const justElim   = eliminated[eliminated.length - 1];
 
         if (justElim) {
-            // Remove from _finalists
             this._finalists = this._finalists.filter(
                 f => f.country.code !== justElim.country.code
             );
-            // Record in permanent final-eliminated list
             this._finalEliminated.push({ country: justElim.country });
         }
 
         const remaining = this._finalists.length;
 
         if (remaining <= 1) {
-            // ── GRAND CHAMPION ─────────────────────────────────────────────
             const champ = remaining === 1
                 ? this._finalists[0].country
-                : (justElim?.country ?? null);  // edge: everyone exited together
-
+                : (justElim?.country ?? null);
             this._triggerGrandChampion(champ);
-        } else {
-            // ── Show elimination card, then rebuild ────────────────────────
-            this._elimShowCountry = justElim?.country ?? null;
-            this._elimShowStart   = Date.now();
-            this.gameState        = "ELIM_SHOW";
+            return;
+        }
 
-            // Pause physics by not updating it during ELIM_SHOW
-            // Clear all remaining flags from physics world so arena is empty
-            this._clearAllFlags();
+        // Close the gap, settle flags, show elimination card
+        this.arena.gapSize = 0;
+        this.arena.state   = "INTRO";
+        this.arena.syncWalls();
 
-            if (this._elimShowCountry?.name) {
-                this.audio.speak(`${this._elimShowCountry.name} has been eliminated!`);
-            }
+        for (const flag of this.flagManager.flags) {
+            const b = flag.body;
+            Matter.Body.setVelocity(b, { x: b.velocity.x * 0.35, y: b.velocity.y * 0.35 });
+            Matter.Body.setAngularVelocity(b, b.angularVelocity * 0.35);
+        }
+
+        this.arena.setRemainingFlags(this.flagManager.flags.length);
+        this.totalCountries = this._finalists.length;
+
+        this._elimShowCountry = justElim?.country ?? null;
+        this._elimShowStart   = Date.now();
+        this.gameState        = "ELIM_SHOW";
+
+        if (this._elimShowCountry?.name) {
+            this.audio.speak(`${this._elimShowCountry.name} has been eliminated!`);
         }
     }
 
     _afterElimShow() {
-        // Card done — trigger arena rebuild with remaining finalists
         this._elimShowCountry = null;
-        this._beginNextEvent();
+        this.eventManager.pick();
+        this.arena.state   = "PLAYING";
+        this.arena.gapSize = this.arena.initialGapSize;
+        this.arena.syncWalls();
+        this.gameState = "PLAYING";
+        this.eventManager.start(this._eventCtx());
+        this.audio.playRoundStart();
+        this._finalRoundNumber++;
     }
 
-    // ── Grand Champion ─────────────────────────────────────────────────────
+    // ── Grand Champion ────────────────────────────────────────────────────────
 
     _triggerGrandChampion(country) {
-        this._grandChampion    = country;
-        this.gameState         = "GRAND_CHAMPION";
-        this._champDisplayStart = Date.now();
+        this._grandChampion      = country;
+        this.gameState           = "GRAND_CHAMPION";
+        this._champDisplayStart  = Date.now();
         this._champCountdownRemain = this._champCountdownSec;
 
-        // Clear everything from arena
         this._clearAllFlags();
         this.eventManager.end(this._eventCtx());
 
-        // Big celebration
         this.confetti.start(this._lw / 2, this._lh * 0.36, 300);
         this.audio.playWinner();
-        if (country?.name) {
-            this.audio.speak(`${country.name} is the Grand Final Champion!`);
-        }
+        if (country?.name) this.audio.speak(`${country.name} is the Grand Final Champion!`);
 
-        // 2-minute countdown then auto-restart
         this._champCountdownTimer = setInterval(() => {
             this._champCountdownRemain--;
             if (this._champCountdownRemain <= 0) {
@@ -660,36 +690,26 @@ export default class Game {
         }, 1000);
     }
 
-    // ── Countdown ─────────────────────────────────────────────────────────
-
-    _beginCountdownForFinal() {
-        // After ELIM_SHOW, rebuild for remaining finalists
-        this._beginNextEvent();
-    }
-
-    // ── Draw ───────────────────────────────────────────────────────────────
+    // ── Draw ──────────────────────────────────────────────────────────────────
 
     draw() {
         const { ctx } = this;
-        const layout  = this.layout;
-
         ctx.fillStyle = "#111";
         ctx.fillRect(0, 0, this._lw, this._lh);
 
         if (this.gameState === "START_SCREEN") return;
 
-        // Grand Champion screen — full-screen celebration, no game UI
         if (this.gameState === "GRAND_CHAMPION") {
             this._drawGrandChampionScreen(ctx);
             this.confetti.draw(ctx);
             return;
         }
 
-        // Leaderboard — always drawn
         this.leaderboardRenderer.draw(
             ctx,
             this.winnerManager.getLeaderboard(),
-            layout.lbX, layout.lbY, layout.lbW, layout.lbRowH, layout.lbRowCount
+            this.layout.lbX, this.layout.lbY, this.layout.lbW,
+            this.layout.lbRowH, this.layout.lbRowCount
         );
 
         this.arenaRenderer.draw(ctx, this.arena);
@@ -701,7 +721,8 @@ export default class Game {
                 ctx,
                 this.eliminationManager?.eliminated ?? [],
                 this.totalCountries,
-                layout.barCenterX, layout.barY, layout.barWidth, layout.barHeight
+                this.layout.barCenterX, this.layout.barY,
+                this.layout.barWidth,   this.layout.barHeight
             );
         }
 
@@ -713,13 +734,11 @@ export default class Game {
                 this.flagManager.flags,
                 this._finalEliminated,
                 this._finalTotalCount,
-                this._lw, this._lh,
-                finalTrayH
+                this._lw, this._lh, finalTrayH
             );
         } else if (this.gameState !== "NEXT_EVENT") {
             this.bottomTrayRenderer.draw(
-                ctx,
-                this.eliminationManager?.eliminated ?? [],
+                ctx, this.eliminationManager?.eliminated ?? [],
                 this._lw, this._lh
             );
         } else {
@@ -729,302 +748,45 @@ export default class Game {
         this.fx.draw(ctx, this._lw, this._lh);
         this._drawCentralOverlay(ctx);
 
-        // ── ELIM_SHOW: draw card over the arena ───────────────────────────
         if (this.gameState === "ELIM_SHOW") {
             this._drawElimShowCard(ctx);
             this.confetti.draw(ctx);
             return;
         }
 
-        // Winner splash (qualifying rounds)
         if (this.gameState === "WINNER_SHOW" || this.gameState === "COUNTDOWN") {
             const elapsed = Date.now() - this.winnerDisplayTime;
             const animT   = this.gameState === "WINNER_SHOW"
-                ? Math.min(1, elapsed / 450)
-                : 1;
+                ? Math.min(1, elapsed / 450) : 1;
             this.winnerRender.draw(
                 ctx, this.winnerManager.winner,
                 this._lw, this._lh,
                 this.gameState === "COUNTDOWN",
                 animT,
-                layout.arenaX, layout.arenaY, layout.arenaRadius,
-                false,  // never isFinalMode for qualifying winner
-                0
+                this.layout.arenaX, this.layout.arenaY, this.layout.arenaRadius,
+                false, 0
             );
         }
 
         this.confetti.draw(ctx);
 
-        if (this.gameState === "NEXT_EVENT") {
-            this._drawNextEventOverlay(ctx);
-        }
-
-        if (this.gameState === "COUNTDOWN") {
-            this._drawCountdownOverlay(ctx);
-        }
+        if (this.gameState === "NEXT_EVENT")  this._drawNextEventOverlay(ctx);
+        if (this.gameState === "COUNTDOWN")   this._drawCountdownOverlay(ctx);
     }
 
-    // ── ELIM_SHOW card ────────────────────────────────────────────────────
-
-    _drawElimShowCard(ctx) {
-        const now     = Date.now();
-        const elapsed = now - this._elimShowStart;
-        const dur     = this._elimShowDuration;
-
-        let alpha;
-        if      (elapsed < 300)       alpha = elapsed / 300;
-        else if (elapsed > dur - 400) alpha = (dur - elapsed) / 400;
-        else                          alpha = 1;
-        alpha = Math.max(0, Math.min(1, alpha));
-
-        const bounce = this._easeOut(Math.min(1, elapsed / 360));
-        const scale  = 0.62 + 0.38 * bounce;
-
-        const cx = this.layout.arenaX;
-        const cy = this.layout.arenaY;
-        const R  = this.layout.arenaRadius;
-
-        // ── Full arena dark overlay ────────────────────────────────────────
-        ctx.save();
-        ctx.globalAlpha = alpha * 0.72;
-        ctx.fillStyle   = "rgba(0,0,0,1)";
-        ctx.beginPath();
-        ctx.arc(cx, cy, R * 0.99, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
-
-        // ── Card ──────────────────────────────────────────────────────────
-        const cardW = Math.min(this._lw * 0.68, 370);
-        const cardH = Math.min(R * 0.62, 158);
-        const cardX = cx - cardW / 2;
-        const cardY = cy - cardH / 2;
-
-        const pivotX = cx;
-        const pivotY = cy;
-
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.translate(pivotX, pivotY);
-        ctx.scale(scale, scale);
-        ctx.translate(-pivotX, -pivotY);
-
-        // Card shadow / glow
-        ctx.shadowColor = "rgba(210, 35, 35, 0.70)";
-        ctx.shadowBlur  = 32;
-
-        // Card background
-        ctx.fillStyle = "rgba(14, 3, 3, 0.98)";
-        ctx.beginPath();
-        if (typeof ctx.roundRect === "function") {
-            ctx.roundRect(cardX, cardY, cardW, cardH, 16);
-        } else {
-            ctx.rect(cardX, cardY, cardW, cardH);
-        }
-        ctx.fill();
-
-        // Red border
-        ctx.strokeStyle = "rgba(220, 40, 40, 0.92)";
-        ctx.lineWidth   = 2.5;
-        ctx.stroke();
-        ctx.shadowBlur  = 0;
-
-        // "ELIMINATED" banner strip
-        const bannerH = Math.round(cardH * 0.32);
-        const grad = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY);
-        grad.addColorStop(0,   "rgba(155, 18, 18, 0.97)");
-        grad.addColorStop(0.5, "rgba(215, 38, 38, 0.97)");
-        grad.addColorStop(1,   "rgba(155, 18, 18, 0.97)");
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        ctx.rect(cardX + 2.5, cardY + 2.5, cardW - 5, bannerH - 2.5);
-        ctx.fill();
-
-        // "ELIMINATED" text
-        const elimSize = Math.min(cardW * 0.082, 20);
-        ctx.font         = `900 ${elimSize}px system-ui, Arial, sans-serif`;
-        ctx.textAlign    = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle    = "#FFFFFF";
-        ctx.shadowColor  = "rgba(0,0,0,0.95)";
-        ctx.shadowBlur   = 7;
-        ctx.fillText("💀  ELIMINATED  💀", cx, cardY + bannerH / 2);
-        ctx.shadowBlur = 0;
-
-        // Flag image
-        const bodyTop = cardY + bannerH + 8;
-        const bodyH   = cardH - bannerH - 10;
-        const flagH   = Math.round(bodyH * 0.80);
-        const flagW   = Math.round(flagH * 1.50);
-        const flagX   = cardX + 20;
-        const flagY   = bodyTop + (bodyH - flagH) / 2;
-
-        const img = this._elimShowCountry?.image;
-        if (img && img.complete && img.naturalWidth > 0) {
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(flagX, flagY, flagW, flagH);
-            ctx.clip();
-            ctx.drawImage(img, flagX, flagY, flagW, flagH);
-            ctx.restore();
-            ctx.strokeStyle = "rgba(255,255,255,0.45)";
-            ctx.lineWidth   = 1.2;
-            ctx.strokeRect(flagX, flagY, flagW, flagH);
-        } else {
-            ctx.fillStyle = "rgba(60,20,20,0.8)";
-            ctx.fillRect(flagX, flagY, flagW, flagH);
-        }
-
-        // Country name
-        const nameX    = flagX + flagW + 16;
-        const maxNameW = cardX + cardW - nameX - 10;
-        const nameSize = Math.min(cardW * 0.088, 19);
-        ctx.font         = `800 ${nameSize}px system-ui, Arial, sans-serif`;
-        ctx.textAlign    = "left";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle    = "#FFFFFF";
-        ctx.shadowColor  = "rgba(0,0,0,0.95)";
-        ctx.shadowBlur   = 9;
-
-        let name = this._elimShowCountry?.name ?? "";
-        while (name.length > 2 && ctx.measureText(name).width > maxNameW) {
-            name = name.slice(0, -1);
-        }
-        ctx.fillText(name, nameX, bodyTop + bodyH / 2);
-
-        // "X countries remaining" sub-line
-        const remCount  = this._finalists.length;
-        const remText   = `${remCount} ${remCount === 1 ? "country" : "countries"} remaining`;
-        const remSize   = Math.min(cardW * 0.060, 13);
-        ctx.font         = `600 ${remSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle    = "rgba(255,180,180,0.85)";
-        ctx.shadowBlur   = 5;
-        ctx.fillText(remText, nameX, bodyTop + bodyH / 2 + nameSize * 1.5);
-
-        ctx.restore();
-    }
-
-    // ── Grand Champion full-screen ─────────────────────────────────────────
-
-    _drawGrandChampionScreen(ctx) {
-        const cw = this._lw;
-        const ch = this._lh;
-        const cx = cw / 2;
-
-        // Animated pulsing dark background
-        const t       = (Date.now() - this._champDisplayStart) / 1000;
-        const pulse   = 0.5 + 0.5 * Math.sin(t * 1.1);
-
-        const bgGrad = ctx.createRadialGradient(cx, ch * 0.42, 0, cx, ch * 0.42, Math.max(cw, ch));
-        bgGrad.addColorStop(0,   `rgba(10, 6, 0, 1)`);
-        bgGrad.addColorStop(0.5, `rgba(6, 4, 0, 1)`);
-        bgGrad.addColorStop(1,   `rgba(2, 2, 2, 1)`);
-        ctx.fillStyle = bgGrad;
-        ctx.fillRect(0, 0, cw, ch);
-
-        // Rotating gold rays
-        ctx.save();
-        ctx.translate(cx, ch * 0.38);
-        ctx.rotate(t * 0.04);
-        const rayR = Math.min(cw, ch) * 0.55;
-        for (let i = 0; i < 14; i++) {
-            const angle    = (i / 14) * Math.PI * 2;
-            const hw       = (i % 2 === 0) ? Math.PI / 14 * 0.7 : Math.PI / 14 * 0.3;
-            const rayAlpha = (i % 2 === 0 ? 0.18 : 0.10) + pulse * 0.06;
-            ctx.beginPath();
-            ctx.moveTo(Math.cos(angle - hw) * 30, Math.sin(angle - hw) * 30);
-            ctx.lineTo(Math.cos(angle) * rayR, Math.sin(angle) * rayR);
-            ctx.lineTo(Math.cos(angle + hw) * 30, Math.sin(angle + hw) * 30);
-            ctx.closePath();
-            ctx.fillStyle = `rgba(255, 200, 0, ${rayAlpha})`;
-            ctx.fill();
-        }
-        ctx.restore();
-
-        ctx.save();
-        ctx.textAlign    = "center";
-        ctx.textBaseline = "middle";
-
-        // ── "TIME'S UP" top badge ──────────────────────────────────────────
-        const badgeSize = Math.min(cw * 0.042, 22);
-        ctx.font         = `700 ${badgeSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle    = "rgba(255,215,0,0.75)";
-        ctx.shadowColor  = "rgba(0,0,0,0.9)";
-        ctx.shadowBlur   = 10;
-        ctx.fillText("⏱  TIME'S UP  ·  GRAND FINAL OVER", cx, ch * 0.10);
-
-        // ── "CHAMPION" heading ─────────────────────────────────────────────
-        const champSize = Math.min(cw * 0.13, 80);
-        ctx.font         = `900 ${champSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle    = "#FFD700";
-        ctx.shadowColor  = "rgba(255,190,0,0.80)";
-        ctx.shadowBlur   = 36 + pulse * 20;
-        ctx.fillText("🏆  CHAMPION  🏆", cx, ch * 0.20);
-
-        // ── Winner flag ────────────────────────────────────────────────────
-        const img    = this._grandChampion?.image;
-        const flagW  = Math.min(cw * 0.44, 300);
-        const flagH  = flagW * 0.65;
-        const flagX  = cx - flagW / 2;
-        const flagY  = ch * 0.27;
-
-        if (img && img.complete && img.naturalWidth > 0) {
-            ctx.save();
-            ctx.shadowColor = "rgba(255,215,0,0.80)";
-            ctx.shadowBlur  = 40 + pulse * 20;
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = "high";
-            ctx.drawImage(img, flagX, flagY, flagW, flagH);
-            ctx.restore();
-            ctx.strokeStyle = `rgba(255,215,0,${0.6 + pulse * 0.3})`;
-            ctx.lineWidth   = 3;
-            ctx.strokeRect(flagX, flagY, flagW, flagH);
-        }
-
-        // ── Country name ───────────────────────────────────────────────────
-        const nameSize = Math.min(cw * 0.085, 54);
-        ctx.font         = `900 ${nameSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle    = "#FFFFFF";
-        ctx.shadowColor  = "rgba(0,0,0,0.95)";
-        ctx.shadowBlur   = 18;
-        ctx.fillText(this._grandChampion?.name ?? "", cx, flagY + flagH + nameSize * 0.9);
-
-        // ── "CONGRATULATIONS" ─────────────────────────────────────────────
-        const congrSize = Math.min(cw * 0.042, 24);
-        ctx.font         = `700 ${congrSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle    = "rgba(255,215,0,0.85)";
-        ctx.shadowBlur   = 14;
-        ctx.fillText("🎊  CONGRATULATIONS  🎊", cx, flagY + flagH + nameSize * 2.1);
-
-        // ── "Next round starting in X:XX" countdown ────────────────────────
-        const mins  = Math.floor(this._champCountdownRemain / 60);
-        const secs  = this._champCountdownRemain % 60;
-        const cdStr = `${mins}:${String(secs).padStart(2, "0")}`;
-
-        const cdSize = Math.min(cw * 0.035, 19);
-        ctx.font      = `600 ${cdSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = "rgba(180,210,255,0.70)";
-        ctx.shadowBlur = 8;
-        ctx.fillText(`Next round starting in  ${cdStr}`, cx, ch * 0.88);
-
-        ctx.restore();
-    }
-
-    // ── Overlays ───────────────────────────────────────────────────────────
+    // ── Overlays (unchanged from v5) ──────────────────────────────────────────
 
     _drawCentralOverlay(ctx) {
         if (this.gameState === "START_SCREEN") return;
-
         const cx     = this.layout.arenaX;
         const aboveY = this.layout.arenaY - this.layout.arenaRadius - 10;
-
         ctx.save();
         ctx.textAlign    = "center";
         ctx.textBaseline = "bottom";
         ctx.shadowColor  = "rgba(0,0,0,0.8)";
         ctx.shadowBlur   = 8;
-
         const labelSize = Math.min(this._lw * 0.030, 13);
-        ctx.font      = `600 ${labelSize}px system-ui, Arial, sans-serif`;
+        ctx.font = `600 ${labelSize}px system-ui, Arial, sans-serif`;
 
         if (this.isFinalMode) {
             ctx.fillStyle = "rgba(40,200,255,0.90)";
@@ -1034,11 +796,11 @@ export default class Game {
             const remaining = Math.max(0, this.QUALIFY_DURATION_MS - elapsed);
             const mins = Math.floor(remaining / 60000);
             const secs = Math.floor((remaining % 60000) / 1000);
-            const timeStr = `${mins}:${secs.toString().padStart(2, "0")}`;
+            // Show how many unique winners (countries sitting on bench) so far
+            const winnersCount = this._qualifyWinners.length;
             ctx.fillStyle = "rgba(180,210,255,0.70)";
-            ctx.fillText(`QUALIFYING · ${timeStr} · Round ${this.roundNumber}`, cx, aboveY);
+            ctx.fillText(`QUALIFYING · ${mins}:${secs.toString().padStart(2,"0")} · Round ${this.roundNumber} · ${winnersCount} qualified`, cx, aboveY);
         }
-
         ctx.restore();
     }
 
@@ -1058,7 +820,6 @@ export default class Game {
         ctx.globalAlpha = alpha;
         ctx.fillStyle   = "rgba(0,0,0,0.42)";
         ctx.fillRect(0, 0, this._lw, this._lh);
-
         ctx.translate(cx, cy);
         ctx.scale(scale, scale);
         ctx.translate(-cx, -cy);
@@ -1073,7 +834,6 @@ export default class Game {
         if (typeof ctx.roundRect === "function") ctx.roundRect(cardX, cardY, cardW, cardH, 16);
         else ctx.rect(cardX, cardY, cardW, cardH);
         ctx.fill();
-
         ctx.strokeStyle = this._hexToRgba(ev.color, 0.55);
         ctx.lineWidth   = 2;
         ctx.stroke();
@@ -1084,7 +844,7 @@ export default class Game {
         ctx.shadowBlur   = 12;
 
         const titleSize = Math.min(this._lw * 0.028, 22);
-        ctx.font      = `700 ${titleSize}px system-ui, Arial, sans-serif`;
+        ctx.font = `700 ${titleSize}px system-ui, Arial, sans-serif`;
         ctx.fillStyle = this.isFinalMode ? "rgba(40,200,255,0.95)" : "rgba(255,215,0,0.95)";
         ctx.fillText(this.isFinalMode ? "🏆 GRAND FINAL" : "NEXT EVENT", cx, cy - cardH * 0.28);
 
@@ -1095,20 +855,19 @@ export default class Game {
         ctx.fillText(this.isFinalMode ? "🏆" : ev.icon, cx, cy - 4);
 
         const eventSize = Math.min(this._lw * 0.055, 42);
-        ctx.font        = `900 ${eventSize}px system-ui, Arial, sans-serif`;
+        ctx.font = `900 ${eventSize}px system-ui, Arial, sans-serif`;
         ctx.fillStyle   = this.isFinalMode ? "#00CFFF" : ev.color;
         ctx.shadowColor = this.isFinalMode ? "rgba(40,180,255,0.5)" : this._hexToRgba(ev.color, 0.5);
         ctx.shadowBlur  = 22;
-        ctx.fillText(this.isFinalMode
-            ? `${this._finalists.length} Countries Remain`
-            : ev.name, cx, cy + cardH * 0.28);
-
+        ctx.fillText(
+            this.isFinalMode ? `${this._finalists.length} Countries Remain` : ev.name,
+            cx, cy + cardH * 0.28
+        );
         ctx.restore();
     }
 
     _drawCountdownOverlay(ctx) {
         if (this.restartCountdown <= 0) return;
-
         const cx = this._lw / 2;
         const cy = this.layout.arenaY;
         const ev = this.eventManager;
@@ -1123,39 +882,43 @@ export default class Game {
         ctx.shadowColor  = "rgba(0,0,0,0.95)";
         ctx.shadowBlur   = 14;
 
+        // Row 1: ROUND N — big gold
         const roundSize = Math.min(this._lw * 0.11, 72);
-        ctx.font      = `900 ${roundSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = this.isFinalMode ? "#00CFFF" : "#FFD700";
+        ctx.font = `900 ${roundSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = this.isFinalMode ? "#00CFFF" : "#FFD700";
         ctx.shadowColor = this.isFinalMode ? "rgba(40,200,255,0.7)" : "rgba(255,200,0,0.7)";
         ctx.shadowBlur  = 20;
-        const roundLabel = this.isFinalMode
-            ? `🏆 FINAL ${this._finalRoundNumber}`
-            : `ROUND ${this.roundNumber}`;
-        ctx.fillText(roundLabel, cx, cy - 95);
+        ctx.fillText(
+            this.isFinalMode ? `🏆 FINAL ${this._finalRoundNumber}` : `ROUND ${this.roundNumber}`,
+            cx, cy - 95
+        );
 
+        // Row 2: event name in event color
         const evNameSize = Math.min(this._lw * 0.065, 44);
-        ctx.font      = `900 ${evNameSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = this.isFinalMode ? "rgba(140,220,255,0.95)" : ev.color;
+        ctx.font = `900 ${evNameSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = this.isFinalMode ? "rgba(140,220,255,0.95)" : ev.color;
         ctx.shadowColor = this.isFinalMode ? "rgba(40,180,255,0.6)" : this._hexToRgba(ev.color, 0.6);
-        ctx.shadowBlur = 18;
-        const evLabel = this.isFinalMode
-            ? `${this._finalists.length} Countries`
-            : `${ev.icon}  ${ev.name}`;
-        ctx.fillText(evLabel, cx, cy - 38);
+        ctx.shadowBlur  = 18;
+        ctx.fillText(
+            this.isFinalMode ? `${this._finalists.length} Countries` : `${ev.icon}  ${ev.name}`,
+            cx, cy - 38
+        );
 
+        // Row 3: flag count
         const countSize = Math.min(this._lw * 0.038, 24);
-        ctx.font      = `700 ${countSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = "rgba(255,255,255,0.70)";
+        ctx.font = `700 ${countSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = "rgba(255,255,255,0.70)";
         ctx.shadowColor = "rgba(0,0,0,0.9)";
         ctx.shadowBlur  = 8;
         ctx.fillText(`${this.totalCountries} FLAGS`, cx, cy + 10);
 
+        // Countdown number
         ctx.save();
         ctx.translate(cx, cy + 75);
         ctx.scale(numScale, numScale);
         const numSize = Math.min(this._lw * 0.20, 120);
-        ctx.font      = `900 ${numSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = this.isFinalMode ? "#00CFFF" : "#FFD700";
+        ctx.font = `900 ${numSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = this.isFinalMode ? "#00CFFF" : "#FFD700";
         ctx.shadowColor = "rgba(0,0,0,0.90)";
         ctx.shadowBlur  = 24;
         ctx.fillText(String(this.restartCountdown), 0, 0);
@@ -1163,6 +926,212 @@ export default class Game {
         ctx.shadowBlur  = 44;
         ctx.fillText(String(this.restartCountdown), 0, 0);
         ctx.restore();
+
+        ctx.restore();
+    }
+
+    _drawElimShowCard(ctx) {
+        const now     = Date.now();
+        const elapsed = now - this._elimShowStart;
+        const dur     = this._elimShowDuration;
+        let alpha;
+        if      (elapsed < 300)       alpha = elapsed / 300;
+        else if (elapsed > dur - 400) alpha = (dur - elapsed) / 400;
+        else                          alpha = 1;
+        alpha = Math.max(0, Math.min(1, alpha));
+
+        const bounce = this._easeOut(Math.min(1, elapsed / 360));
+        const scale  = 0.62 + 0.38 * bounce;
+        const cx     = this.layout.arenaX;
+        const cy     = this.layout.arenaY;
+        const R      = this.layout.arenaRadius;
+
+        ctx.save();
+        ctx.globalAlpha = alpha * 0.72;
+        ctx.fillStyle   = "rgba(0,0,0,1)";
+        ctx.beginPath();
+        ctx.arc(cx, cy, R * 0.99, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        const cardW = Math.min(this._lw * 0.68, 370);
+        const cardH = Math.min(R * 0.62, 158);
+        const cardX = cx - cardW / 2;
+        const cardY = cy - cardH / 2;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(cx, cy);
+        ctx.scale(scale, scale);
+        ctx.translate(-cx, -cy);
+
+        ctx.shadowColor = "rgba(210,35,35,0.70)";
+        ctx.shadowBlur  = 32;
+        ctx.fillStyle   = "rgba(14,3,3,0.98)";
+        ctx.beginPath();
+        if (typeof ctx.roundRect === "function") ctx.roundRect(cardX, cardY, cardW, cardH, 16);
+        else ctx.rect(cardX, cardY, cardW, cardH);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(220,40,40,0.92)";
+        ctx.lineWidth   = 2.5;
+        ctx.stroke();
+        ctx.shadowBlur  = 0;
+
+        const bannerH = Math.round(cardH * 0.32);
+        const grad    = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY);
+        grad.addColorStop(0,   "rgba(155,18,18,0.97)");
+        grad.addColorStop(0.5, "rgba(215,38,38,0.97)");
+        grad.addColorStop(1,   "rgba(155,18,18,0.97)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.rect(cardX + 2.5, cardY + 2.5, cardW - 5, bannerH - 2.5);
+        ctx.fill();
+
+        const elimSize = Math.min(cardW * 0.082, 20);
+        ctx.font = `900 ${elimSize}px system-ui, Arial, sans-serif`;
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle    = "#FFFFFF";
+        ctx.shadowColor  = "rgba(0,0,0,0.95)";
+        ctx.shadowBlur   = 7;
+        ctx.fillText("💀  ELIMINATED  💀", cx, cardY + bannerH / 2);
+        ctx.shadowBlur = 0;
+
+        const bodyTop = cardY + bannerH + 8;
+        const bodyH   = cardH - bannerH - 10;
+        const flagH   = Math.round(bodyH * 0.80);
+        const flagW   = Math.round(flagH * 1.50);
+        const flagX   = cardX + 20;
+        const flagY2  = bodyTop + (bodyH - flagH) / 2;
+
+        const img = this._elimShowCountry?.image;
+        if (img && img.complete && img.naturalWidth > 0) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(flagX, flagY2, flagW, flagH);
+            ctx.clip();
+            ctx.drawImage(img, flagX, flagY2, flagW, flagH);
+            ctx.restore();
+            ctx.strokeStyle = "rgba(255,255,255,0.45)";
+            ctx.lineWidth   = 1.2;
+            ctx.strokeRect(flagX, flagY2, flagW, flagH);
+        } else {
+            ctx.fillStyle = "rgba(60,20,20,0.8)";
+            ctx.fillRect(flagX, flagY2, flagW, flagH);
+        }
+
+        const nameX    = flagX + flagW + 16;
+        const maxNameW = cardX + cardW - nameX - 10;
+        const nameSize = Math.min(cardW * 0.088, 19);
+        ctx.font = `800 ${nameSize}px system-ui, Arial, sans-serif`;
+        ctx.textAlign    = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle    = "#FFFFFF";
+        ctx.shadowColor  = "rgba(0,0,0,0.95)";
+        ctx.shadowBlur   = 9;
+
+        let name = this._elimShowCountry?.name ?? "";
+        while (name.length > 2 && ctx.measureText(name).width > maxNameW) name = name.slice(0, -1);
+        ctx.fillText(name, nameX, bodyTop + bodyH / 2);
+
+        const remCount = this._finalists.length;
+        const remText  = `${remCount} ${remCount === 1 ? "country" : "countries"} remaining`;
+        const remSize  = Math.min(cardW * 0.060, 13);
+        ctx.font = `600 ${remSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "rgba(255,180,180,0.85)";
+        ctx.shadowBlur = 5;
+        ctx.fillText(remText, nameX, bodyTop + bodyH / 2 + nameSize * 1.5);
+
+        ctx.restore();
+    }
+
+    _drawGrandChampionScreen(ctx) {
+        const cw = this._lw, ch = this._lh, cx = cw / 2;
+        const t     = (Date.now() - this._champDisplayStart) / 1000;
+        const pulse = 0.5 + 0.5 * Math.sin(t * 1.1);
+
+        const bgGrad = ctx.createRadialGradient(cx, ch * 0.42, 0, cx, ch * 0.42, Math.max(cw, ch));
+        bgGrad.addColorStop(0, "rgba(10,6,0,1)");
+        bgGrad.addColorStop(0.5, "rgba(6,4,0,1)");
+        bgGrad.addColorStop(1, "rgba(2,2,2,1)");
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, cw, ch);
+
+        ctx.save();
+        ctx.translate(cx, ch * 0.38);
+        ctx.rotate(t * 0.04);
+        const rayR = Math.min(cw, ch) * 0.55;
+        for (let i = 0; i < 14; i++) {
+            const angle    = (i / 14) * Math.PI * 2;
+            const hw       = i % 2 === 0 ? Math.PI / 14 * 0.7 : Math.PI / 14 * 0.3;
+            const rayAlpha = (i % 2 === 0 ? 0.18 : 0.10) + pulse * 0.06;
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(angle - hw) * 30, Math.sin(angle - hw) * 30);
+            ctx.lineTo(Math.cos(angle) * rayR,    Math.sin(angle) * rayR);
+            ctx.lineTo(Math.cos(angle + hw) * 30, Math.sin(angle + hw) * 30);
+            ctx.closePath();
+            ctx.fillStyle = `rgba(255,200,0,${rayAlpha})`;
+            ctx.fill();
+        }
+        ctx.restore();
+
+        ctx.save();
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "middle";
+
+        const badgeSize = Math.min(cw * 0.042, 22);
+        ctx.font = `700 ${badgeSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = "rgba(255,215,0,0.75)";
+        ctx.shadowColor = "rgba(0,0,0,0.9)";
+        ctx.shadowBlur  = 10;
+        ctx.fillText("⏱  TIME'S UP  ·  GRAND FINAL OVER", cx, ch * 0.10);
+
+        const champSize = Math.min(cw * 0.13, 80);
+        ctx.font = `900 ${champSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = "#FFD700";
+        ctx.shadowColor = "rgba(255,190,0,0.80)";
+        ctx.shadowBlur  = 36 + pulse * 20;
+        ctx.fillText("🏆  CHAMPION  🏆", cx, ch * 0.20);
+
+        const img   = this._grandChampion?.image;
+        const flagW = Math.min(cw * 0.44, 300);
+        const flagH = flagW * 0.65;
+        const flagX = cx - flagW / 2;
+        const flagY = ch * 0.27;
+        if (img && img.complete && img.naturalWidth > 0) {
+            ctx.save();
+            ctx.shadowColor = "rgba(255,215,0,0.80)";
+            ctx.shadowBlur  = 40 + pulse * 20;
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+            ctx.drawImage(img, flagX, flagY, flagW, flagH);
+            ctx.restore();
+            ctx.strokeStyle = `rgba(255,215,0,${0.6 + pulse * 0.3})`;
+            ctx.lineWidth   = 3;
+            ctx.strokeRect(flagX, flagY, flagW, flagH);
+        }
+
+        const nameSize = Math.min(cw * 0.085, 54);
+        ctx.font = `900 ${nameSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = "#FFFFFF";
+        ctx.shadowColor = "rgba(0,0,0,0.95)";
+        ctx.shadowBlur  = 18;
+        ctx.fillText(this._grandChampion?.name ?? "", cx, flagY + flagH + nameSize * 0.9);
+
+        const congrSize = Math.min(cw * 0.042, 24);
+        ctx.font = `700 ${congrSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "rgba(255,215,0,0.85)";
+        ctx.shadowBlur = 14;
+        ctx.fillText("🎊  CONGRATULATIONS  🎊", cx, flagY + flagH + nameSize * 2.1);
+
+        const mins  = Math.floor(this._champCountdownRemain / 60);
+        const secs  = this._champCountdownRemain % 60;
+        const cdStr = `${mins}:${String(secs).padStart(2, "0")}`;
+        const cdSize = Math.min(cw * 0.035, 19);
+        ctx.font = `600 ${cdSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "rgba(180,210,255,0.70)";
+        ctx.shadowBlur = 8;
+        ctx.fillText(`Next round starting in  ${cdStr}`, cx, ch * 0.88);
 
         ctx.restore();
     }
