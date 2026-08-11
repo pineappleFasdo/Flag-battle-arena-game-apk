@@ -20,6 +20,7 @@ import CommentarySystem    from "../audio/CommentarySystem";
 import LeaderboardRenderer from "../render/LeaderboardRenderer";
 import EventManager        from "../events/EventManager";
 import TrayLauncher        from "../effects/TrayLauncher";
+import HighestWinsMode     from "../modes/HighestWinsMode";
 import Matter              from "matter-js";
 
 export default class Game {
@@ -82,6 +83,10 @@ export default class Game {
         this.roundNumber         = 0;
         this.isFinalMode         = false;
         this._currentEventId     = null;
+
+        // Active home-page mode controller (null = classic qualifier)
+        // Future modes: assign a new class here from startEvent()
+        this.sessionMode         = null;
 
         // ── Final mode ────────────────────────────────────────────────────
         this._finalists         = [];
@@ -268,12 +273,25 @@ export default class Game {
      */
     startEvent(eventId) {
         this._currentEventId = eventId;
+
+        // Attach isolated mode controller — classic uses null
+        if (eventId === HighestWinsMode.ID) {
+            this.sessionMode = new HighestWinsMode(this);
+        } else {
+            this.sessionMode = null; // classic 40-min qualifier
+        }
+
         this._doReset();
     }
 
     /** Legacy: called if something still calls startGame() */
     startGame() {
         this.startEvent('qualifier_40');
+    }
+
+    /** True when running the separate Highest Winner Wins home event. */
+    get isHighestWinsMode() {
+        return this.sessionMode instanceof HighestWinsMode;
     }
 
     // ── Winner handling (qualifying) ──────────────────────────────────────────
@@ -301,13 +319,22 @@ export default class Game {
             this.audio.playWinner();
             this.audio.speak(`${winner.country.name} wins!`);
 
-            // ── KEY FIX: remove winner from qualifying pool ───────────────
-            // That country won't appear in any future qualifying round.
-            this._removeWinnerFromPool(winner.country.code);
+            // Classic only: remove winner from pool so they sit out until recycle
+            // Highest-Wins mode keeps everyone eligible (accumulate wins)
+            if (!this.isHighestWinsMode) {
+                this._removeWinnerFromPool(winner.country.code);
+            }
         }
 
-        // Check if 40 minutes are up → go to Final Mode
-        if (this.sessionStartTime > 0) {
+        // ── Mode-specific session end ─────────────────────────────────────
+        if (this.isHighestWinsMode) {
+            const result = this.sessionMode.onRoundComplete(winner);
+            if (result === "end") {
+                this._endHighestWinsSession();
+                return;
+            }
+        } else if (this.sessionStartTime > 0) {
+            // Classic: 40 minutes up → Last Standing Final Mode
             const elapsed = Date.now() - this.sessionStartTime;
             if (elapsed >= this.QUALIFY_DURATION_MS) {
                 this._enterFinalMode();
@@ -320,6 +347,38 @@ export default class Game {
 
         const displayDuration = (isTie && winner.isSilent) ? 500 : this.winnerDisplayDuration;
         this.restartTimer = setTimeout(() => this._beginNextEvent(), displayDuration);
+    }
+
+    /** End Highest Winner Wins session — champion = most wins, no final. */
+    _endHighestWinsSession() {
+        const champ = this.sessionMode?.champion;
+        if (!champ) {
+            // No wins recorded — restart session
+            this.restartTimer = setTimeout(() => this._beginNextEvent(), 800);
+            return;
+        }
+
+        this.isFinalMode = false;
+        this._grandChampion = champ.country;
+        this._champDisplayStart = Date.now();
+        this._champCountdownRemain = this._champCountdownSec;
+        this.gameState = "GRAND_CHAMPION";
+
+        this.confetti.start(this._lw / 2, this._lh * 0.36, 200);
+        this.audio.playWinner();
+        this.audio.speak(
+            `${champ.name} is the highest winner with ${champ.wins} win${champ.wins === 1 ? "" : "s"}!`
+        );
+
+        if (this._champCountdownTimer) clearInterval(this._champCountdownTimer);
+        this._champCountdownTimer = setInterval(() => {
+            this._champCountdownRemain--;
+            if (this._champCountdownRemain <= 0) {
+                clearInterval(this._champCountdownTimer);
+                this._champCountdownTimer = null;
+                this._doReset();
+            }
+        }, 1000);
     }
 
     // ── Final Mode ────────────────────────────────────────────────────────────
@@ -357,12 +416,15 @@ export default class Game {
         this._finalElimPhase = null;
 
         if (this.isFinalMode) {
-            // Final mode: LAST STANDING event (video-matched sequential exits)
+            // Classic Final only: LAST STANDING sequential exits
             this.activeCountries = this._finalists.map(f => f.country);
             this.eventManager.pickLastStanding();
+        } else if (this.isHighestWinsMode) {
+            // Highest Wins: everyone stays eligible; mode picks the batch
+            this.activeCountries = this.sessionMode.pickBatch();
+            this.eventManager.pick();
         } else {
-            // Qualifying mode: take next batch from pool
-            // (winners have already been removed from the pool by handleWinner)
+            // Classic qualifying: winners sit out until pool recycles
             this.activeCountries = this._pickQualifyBatch();
         }
 
@@ -437,8 +499,13 @@ export default class Game {
         this._finalElimPhase   = null;
         this._finalStalemateSince = 0;
 
-        // Fresh qualifying pool — all countries eligible again
-        this._initQualifyPool();
+        // Mode-specific session init
+        if (this.isHighestWinsMode) {
+            this.sessionMode.onSessionStart();
+        } else {
+            // Classic: fresh qualifying pool — winners sit out after each win
+            this._initQualifyPool();
+        }
 
         this.trayLauncher.cancel();
         this._clearAllFlags();
@@ -447,7 +514,11 @@ export default class Game {
         this.nextEventTimer = 0;
 
         // Pick first batch
-        this.activeCountries = this._pickQualifyBatch();
+        if (this.isHighestWinsMode) {
+            this.activeCountries = this.sessionMode.pickBatch();
+        } else {
+            this.activeCountries = this._pickQualifyBatch();
+        }
         this.totalCountries  = this.activeCountries.length;
 
         const spawnRadius = this.layout.arenaRadius - 20;
@@ -1101,13 +1172,21 @@ export default class Game {
             const remaining = Math.max(0, this.QUALIFY_DURATION_MS - elapsed);
             const mins = Math.floor(remaining / 60000);
             const secs = Math.floor((remaining % 60000) / 1000);
-            const winnersCount = this._qualifyWinners.length;
-            // Professional sports broadcast title
             ctx.fillStyle = "#91A7C9";
-            ctx.fillText(
-                `${this.totalCountries}-COUNTRY FLAGS BATTLE  ·  ${mins}:${secs.toString().padStart(2,"0")}  ·  R${this.roundNumber}  ·  ${winnersCount} Q`,
-                cx, aboveY
-            );
+            if (this.isHighestWinsMode) {
+                const top = this.winnerManager.getLeaderboard()[0];
+                const topLabel = top ? `${top.name} ${top.wins}W` : "—";
+                ctx.fillText(
+                    `HIGHEST WINNER WINS  ·  ${mins}:${secs.toString().padStart(2,"0")}  ·  R${this.roundNumber}  ·  LEAD ${topLabel}`,
+                    cx, aboveY
+                );
+            } else {
+                const winnersCount = this._qualifyWinners.length;
+                ctx.fillText(
+                    `${this.totalCountries}-COUNTRY FLAGS BATTLE  ·  ${mins}:${secs.toString().padStart(2,"0")}  ·  R${this.roundNumber}  ·  ${winnersCount} Q`,
+                    cx, aboveY
+                );
+            }
         }
         ctx.restore();
     }
@@ -1233,7 +1312,11 @@ export default class Game {
         ctx.shadowColor = "rgba(0,0,0,0.8)";
         ctx.shadowBlur  = 6;
         ctx.fillText(
-            this.isFinalMode ? "LAST FLAG STANDING" : `${this.totalCountries}-COUNTRY FLAGS BATTLE`,
+            this.isFinalMode
+                ? "LAST FLAG STANDING"
+                : this.isHighestWinsMode
+                    ? "HIGHEST WINNER WINS"
+                    : `${this.totalCountries}-COUNTRY FLAGS BATTLE`,
             cx, cy - 22
         );
 

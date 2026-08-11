@@ -23,8 +23,17 @@ const SELECTION_EVENTS = [
         glowColor   : 'rgba(61, 124, 255, 0.25)',
         badge       : 'CLASSIC',
     },
-    // Future events go here, e.g.:
-    // { id: 'blitz', icon: '⚡', title: 'Blitz Mode', subtitle: '60 flags · 10 minutes', ... }
+    {
+        id          : 'highest_wins',
+        icon        : '🏆',
+        title       : 'Highest Winner Wins',
+        subtitle    : '40 min · every country keeps fighting · most wins at the end is champion',
+        color       : '#FFC83D',
+        borderColor : 'rgba(255, 200, 61, 0.70)',
+        glowColor   : 'rgba(255, 200, 61, 0.22)',
+        badge       : 'NEW',
+    },
+    // Future home events: push another object here + add a mode class under src/modes/
 ];
 
 const homeScreen = document.createElement('div');
@@ -32,14 +41,31 @@ homeScreen.id = 'nr-home-screen';
 
 homeScreen.innerHTML = `
   <div class="nr-home-header">
-    <div class="nr-home-globe">🌍</div>
-    <div class="nr-home-title">NATIONAL ROYALE</div>
+    <div class="nr-waving-flag" aria-hidden="true">
+      <div class="nr-flag-pole"></div>
+      <div class="nr-flag-cloth">
+        <svg class="nr-flag-svg" viewBox="0 0 120 72" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="nrFlagGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#3D7CFF"/>
+              <stop offset="45%" stop-color="#38D5FF"/>
+              <stop offset="100%" stop-color="#FFC83D"/>
+            </linearGradient>
+          </defs>
+          <path class="nr-flag-shape" d="M4,6 L112,4 Q118,20 112,36 Q106,52 112,68 L4,66 Z" fill="url(#nrFlagGrad)"/>
+          <circle cx="28" cy="36" r="11" fill="none" stroke="#F4F7FF" stroke-width="2.2" opacity="0.9"/>
+          <circle cx="28" cy="36" r="4" fill="#F4F7FF" opacity="0.95"/>
+        </svg>
+      </div>
+    </div>
+    <div class="nr-home-title">FLAG BATTLE ARENA</div>
     <div class="nr-home-tagline">Choose your battle</div>
   </div>
 
   <div class="nr-event-list" id="nr-event-list">
     ${SELECTION_EVENTS.map(ev => `
       <button
+        type="button"
         class="nr-event-card"
         data-event-id="${ev.id}"
         style="
@@ -63,7 +89,7 @@ homeScreen.innerHTML = `
     `).join('')}
   </div>
 
-  <div class="nr-home-footer">Tap an event to start</div>
+  <div class="nr-home-footer">Tap an event to start · 2 modes available</div>
 `;
 overlay.appendChild(homeScreen);
 
@@ -93,9 +119,42 @@ function loop() {
     requestAnimationFrame(loop);
 }
 
+// ── Keep screen awake while a match is running (mobile) ─────────────────────
+let _wakeLock = null;
+
+async function requestWakeLock() {
+    try {
+        if (navigator.wakeLock && navigator.wakeLock.request) {
+            _wakeLock = await navigator.wakeLock.request('screen');
+            _wakeLock.addEventListener('release', function () {
+                _wakeLock = null;
+            });
+        }
+    } catch (err) {
+        _wakeLock = null;
+    }
+}
+
+async function releaseWakeLock() {
+    try {
+        if (_wakeLock) {
+            await _wakeLock.release();
+            _wakeLock = null;
+        }
+    } catch (err) {
+        _wakeLock = null;
+    }
+}
+
 document.addEventListener('visibilitychange', function () {
     isPaused = document.hidden;
-    if (!isPaused) setTimeout(function () { isPaused = false; }, 50);
+    if (!isPaused) {
+        setTimeout(function () { isPaused = false; }, 50);
+        // Re-acquire wake lock when returning to a live match
+        if (homeScreen.style.display === 'none') {
+            requestWakeLock();
+        }
+    }
 });
 
 requestAnimationFrame(loop);
@@ -113,6 +172,7 @@ document.getElementById('nr-event-list').addEventListener('click', function (e) 
 
     setTimeout(function () {
         homeScreen.style.display = 'none';
+        requestWakeLock();
         game.startEvent(eventId);   // Game.js reads the eventId to configure the session
     }, 380);
 });
@@ -199,10 +259,12 @@ function initCapacitor() {
         m.App.addListener('backButton', function () {
             if (game.gameState === 'START_SCREEN') {
                 // Show home screen again instead of exiting
+                releaseWakeLock();
                 homeScreen.style.display = '';
                 homeScreen.classList.remove('nr-hiding');
             } else {
                 game._doReset();
+                releaseWakeLock();
                 homeScreen.style.display = '';
                 homeScreen.classList.remove('nr-hiding');
             }

@@ -158,9 +158,9 @@ export default class LeaderboardRenderer {
         const rowsY = y + headerH;
         const rowsH = n * rowH;
 
+        // Clip row area with bottom corners rounded so last row doesn't square them off
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(x, rowsY, w, rowsH);
+        this._rrect(ctx, x, rowsY, w, rowsH, [0, 0, radius, radius]);
         ctx.clip();
 
         if (this._fading && fadeT < 1) {
@@ -203,6 +203,12 @@ export default class LeaderboardRenderer {
                 dotX += dotGap;
             }
         }
+
+        // Re-stroke full panel so bottom corners stay clean & rounded
+        ctx.strokeStyle = '#2E62E8';
+        ctx.lineWidth   = 1.5;
+        this._rrect(ctx, x, y, w, totalH, radius);
+        ctx.stroke();
 
         ctx.restore();
     }
