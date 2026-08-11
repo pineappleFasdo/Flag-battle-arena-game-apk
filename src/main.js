@@ -41,21 +41,22 @@ homeScreen.id = 'nr-home-screen';
 
 homeScreen.innerHTML = `
   <div class="nr-home-header">
-    <div class="nr-waving-flag" aria-hidden="true">
-      <div class="nr-flag-pole"></div>
-      <div class="nr-flag-cloth">
-        <svg class="nr-flag-svg" viewBox="0 0 120 72" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <linearGradient id="nrFlagGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stop-color="#3D7CFF"/>
-              <stop offset="45%" stop-color="#38D5FF"/>
-              <stop offset="100%" stop-color="#FFC83D"/>
-            </linearGradient>
-          </defs>
-          <path class="nr-flag-shape" d="M4,6 L112,4 Q118,20 112,36 Q106,52 112,68 L4,66 Z" fill="url(#nrFlagGrad)"/>
-          <circle cx="28" cy="36" r="11" fill="none" stroke="#F4F7FF" stroke-width="2.2" opacity="0.9"/>
-          <circle cx="28" cy="36" r="4" fill="#F4F7FF" opacity="0.95"/>
-        </svg>
+    <div class="nr-crossed-flags" aria-hidden="true">
+      <div class="nr-cross-flag nr-cross-flag--left">
+        <div class="nr-cross-pole"></div>
+        <div class="nr-cross-cloth nr-cross-cloth--a">
+          <span class="nr-cross-stripe s1"></span>
+          <span class="nr-cross-stripe s2"></span>
+          <span class="nr-cross-stripe s3"></span>
+        </div>
+      </div>
+      <div class="nr-cross-flag nr-cross-flag--right">
+        <div class="nr-cross-pole"></div>
+        <div class="nr-cross-cloth nr-cross-cloth--b">
+          <span class="nr-cross-stripe s1"></span>
+          <span class="nr-cross-stripe s2"></span>
+          <span class="nr-cross-stripe s3"></span>
+        </div>
       </div>
     </div>
     <div class="nr-home-title">FLAG BATTLE ARENA</div>

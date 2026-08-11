@@ -74,13 +74,20 @@ export default class Confetti {
      * Continuous top-down confetti rain (champion screen).
      * Appends particles; does not clear existing ones.
      */
-    rain(canvasWidth, count = 16) {
+    /**
+     * Soft champion rain — smaller, slower, lower opacity so UI stays readable.
+     * @param {number} canvasWidth
+     * @param {number} [count=8]
+     * @param {object} [opts]
+     */
+    rain(canvasWidth, count = 8, opts = {}) {
         const colors = [
             "#ff3b30", "#ff9500", "#ffcc00", "#34c759",
             "#00c7ff", "#007aff", "#5856d6", "#af52de",
             "#ff2d55", "#ffffff", "#FFE566", "#FFD700",
         ];
         const w = canvasWidth || 400;
+        const alphaScale = opts.alphaScale ?? 0.55; // fade overall
 
         for (let i = 0; i < count; i++) {
             const roll = Math.random();
@@ -91,36 +98,39 @@ export default class Confetti {
 
             this.particles.push({
                 x: Math.random() * w,
-                y: -10 - Math.random() * 30,
-                vx: (Math.random() - 0.5) * 2.8,
-                vy: 1.2 + Math.random() * 3.2,
-                gravity: 0.07 + Math.random() * 0.05,
-                drag: 0.990 + Math.random() * 0.006,
+                y: -8 - Math.random() * 24,
+                // slower drift + fall
+                vx: (Math.random() - 0.5) * 1.2,
+                vy: 0.45 + Math.random() * 1.1,
+                gravity: 0.025 + Math.random() * 0.02,
+                drag: 0.992 + Math.random() * 0.005,
                 rotation: Math.random() * Math.PI * 2,
-                rotationSpeed: (Math.random() - 0.5) * 0.35,
+                rotationSpeed: (Math.random() - 0.5) * 0.18,
                 wobble: Math.random() * Math.PI * 2,
-                wobbleSpeed: 0.03 + Math.random() * 0.05,
+                wobbleSpeed: 0.02 + Math.random() * 0.03,
                 color: colors[Math.floor(Math.random() * colors.length)],
                 shape,
+                // smaller pieces
                 width: shape === "ribbon"
-                    ? 3 + Math.random() * 5
+                    ? 1.5 + Math.random() * 2.5
                     : shape === "glitter"
-                        ? 2 + Math.random() * 2
-                        : 4 + Math.random() * 5,
+                        ? 1 + Math.random() * 1.5
+                        : 2 + Math.random() * 2.5,
                 height: shape === "ribbon"
-                    ? 10 + Math.random() * 12
+                    ? 5 + Math.random() * 6
                     : shape === "glitter"
-                        ? 2 + Math.random() * 2
-                        : 4 + Math.random() * 5,
-                life: 1,
-                fade: 0.002 + Math.random() * 0.0025,
+                        ? 1 + Math.random() * 1.5
+                        : 2 + Math.random() * 2.5,
+                life: alphaScale * (0.75 + Math.random() * 0.25),
+                fade: 0.0015 + Math.random() * 0.0018,
                 sparkle: Math.random() * Math.PI * 2,
+                alphaScale,
             });
         }
 
-        // Cap particle count for performance
-        if (this.particles.length > 420) {
-            this.particles = this.particles.slice(-420);
+        // Lower cap so champion screen never floods
+        if (this.particles.length > 180) {
+            this.particles = this.particles.slice(-180);
         }
     }
 

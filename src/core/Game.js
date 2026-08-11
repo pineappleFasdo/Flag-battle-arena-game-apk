@@ -364,7 +364,7 @@ export default class Game {
         this._champCountdownRemain = this._champCountdownSec;
         this.gameState = "GRAND_CHAMPION";
 
-        this.confetti.start(this._lw / 2, this._lh * 0.36, 200);
+        this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
         this.audio.playWinner();
         this.audio.speak(
             `${champ.name} is the highest winner with ${champ.wins} win${champ.wins === 1 ? "" : "s"}!`
@@ -644,9 +644,9 @@ export default class Game {
         if (this.gameState === "GRAND_CHAMPION") {
             this.confetti.update();
             this._champConfettiTick = (this._champConfettiTick || 0) + 1;
-            // Respawn a light top rain every ~20 frames so it never dies out
-            if (this._champConfettiTick % 20 === 0) {
-                this.confetti.rain(this._lw, 18);
+            // Soft sparse rain — slower interval, fewer smaller pieces
+            if (this._champConfettiTick % 36 === 0) {
+                this.confetti.rain(this._lw, 6, { alphaScale: 0.5 });
             }
             // Occasional clap/confetti burst for celebration feel
             if (this._champConfettiTick % 90 === 0) {
