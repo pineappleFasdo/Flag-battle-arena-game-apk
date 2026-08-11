@@ -12,18 +12,18 @@ export default class ProgressBarRenderer {
 
         ctx.save();
 
-        // Track
-        ctx.fillStyle = "#111A36";
+        // Track — secondary BG
+        ctx.fillStyle = '#0A1226';
         ctx.beginPath();
         ctx.roundRect(barX, barY, width, barHeight, r);
         ctx.fill();
 
-        // Fill
+        // Fill — electric blue → cyan, shift toward danger when low
         if (fraction > 0) {
             let fillColor;
-            if      (fraction > 0.65) fillColor = "#62B6FF";
-            else if (fraction > 0.35) fillColor = "#B38BC2";
-            else                      fillColor = "#D96E98";
+            if      (fraction > 0.65) fillColor = '#3D7CFF';
+            else if (fraction > 0.35) fillColor = '#38D5FF';
+            else                      fillColor = '#FF5368';
 
             ctx.save();
             ctx.beginPath();
@@ -35,7 +35,7 @@ export default class ProgressBarRenderer {
         }
 
         // Border
-        ctx.strokeStyle = "rgba(255,255,255,0.10)";
+        ctx.strokeStyle = 'rgba(46, 98, 232, 0.45)';
         ctx.lineWidth   = 1;
         ctx.beginPath();
         ctx.roundRect(barX, barY, width, barHeight, r);
@@ -43,11 +43,11 @@ export default class ProgressBarRenderer {
 
         // Centre text
         const textSize = Math.max(9, Math.round(barHeight * 0.58));
-        ctx.fillStyle    = "#FFFFFF";
-        ctx.font         = `bold ${textSize}px system-ui, Arial, sans-serif`;
-        ctx.textAlign    = "center";
-        ctx.textBaseline = "middle";
-        ctx.shadowColor  = "rgba(0,0,0,0.6)";
+        ctx.fillStyle    = '#F4F7FF';
+        ctx.font         = `700 ${textSize}px system-ui, Arial, sans-serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor  = 'rgba(0,0,0,0.55)';
         ctx.shadowBlur   = 3;
         ctx.fillText(`${alive} / ${total} COUNTRIES`, centerX, barY + barHeight / 2);
         ctx.shadowBlur = 0;
@@ -68,7 +68,7 @@ export default class ProgressBarRenderer {
                 ctx.drawImage(img, fX, fY, fW, fH);
                 ctx.restore();
 
-                ctx.strokeStyle = "rgba(255,255,255,0.30)";
+                ctx.strokeStyle = 'rgba(244, 247, 255, 0.30)';
                 ctx.lineWidth   = 1;
                 ctx.beginPath();
                 ctx.roundRect(fX, fY, fW, fH, 2);
@@ -78,13 +78,13 @@ export default class ProgressBarRenderer {
 
         ctx.restore();
 
-        // "ELIMINATED" caption
+        // Broadcast-style caption
         ctx.save();
-        ctx.fillStyle    = "#00CFEA";
-        ctx.font         = `bold ${Math.max(9, Math.round(barHeight * 0.55))}px system-ui, Arial, sans-serif`;
-        ctx.textAlign    = "center";
-        ctx.textBaseline = "top";
-        ctx.fillText("ELIMINATED", centerX, barY + barHeight + 4);
+        ctx.fillStyle    = '#38D5FF';
+        ctx.font         = `700 ${Math.max(9, Math.round(barHeight * 0.55))}px system-ui, Arial, sans-serif`;
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText('ELIMINATED', centerX, barY + barHeight + 4);
         ctx.restore();
     }
 }

@@ -1,10 +1,8 @@
-// FIX 8: Layout (flagH, flagW, cols, rows) is cached and only recomputed when
-// the eliminated count changes. Saves a for-loop of up to ~70 iterations every frame.
+// Bottom tray — eliminated flags strip (broadcast navy panel)
 
 export default class BottomTrayRenderer {
 
     constructor() {
-        // Cache for the expensive flagH-fitting loop
         this._layoutCache = null;
     }
 
@@ -13,22 +11,22 @@ export default class BottomTrayRenderer {
         const padding = 5;
         const trayTop = canvasHeight - trayHeight;
 
-        // Background gradient
+        // Background — secondary / panels
         const gradient = ctx.createLinearGradient(0, trayTop, 0, canvasHeight);
-        gradient.addColorStop(0, "rgba(18,18,28,0.97)");
-        gradient.addColorStop(1, "rgba(8,8,14,1)");
+        gradient.addColorStop(0, 'rgba(16, 29, 56, 0.97)');
+        gradient.addColorStop(1, 'rgba(5, 8, 22, 1)');
         ctx.fillStyle = gradient;
         ctx.fillRect(0, trayTop, canvasWidth, trayHeight);
 
-        ctx.strokeStyle = "rgba(255,255,255,0.07)";
-        ctx.lineWidth   = 1;
+        ctx.strokeStyle = 'rgba(46, 98, 232, 0.40)';
+        ctx.lineWidth   = 1.2;
         ctx.beginPath();
         ctx.moveTo(0, trayTop);
         ctx.lineTo(canvasWidth, trayTop);
         ctx.stroke();
 
         if (eliminated.length === 0) {
-            this._layoutCache = null;   // reset cache when tray is cleared
+            this._layoutCache = null;
             return;
         }
 
@@ -39,7 +37,6 @@ export default class BottomTrayRenderer {
         const gapX   = 2;
         const gapY   = 2;
 
-        // FIX 8: Only recompute layout when eliminated count or canvas width changes
         const cacheKey = `${eliminated.length}|${canvasWidth}|${trayHeight}`;
         let layout = this._layoutCache;
 
@@ -92,13 +89,13 @@ export default class BottomTrayRenderer {
                 ctx.restore();
 
                 if (flagH >= 8) {
-                    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+                    ctx.strokeStyle = 'rgba(244, 247, 255, 0.10)';
                     ctx.lineWidth   = 0.5;
                     ctx.strokeRect(fx, fy, flagW, flagH);
                 }
 
             } else {
-                ctx.fillStyle = "#223";
+                ctx.fillStyle = '#172B50';
                 ctx.fillRect(fx, fy, flagW, flagH);
             }
         }

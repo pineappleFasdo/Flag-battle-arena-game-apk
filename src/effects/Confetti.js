@@ -20,6 +20,7 @@ export default class Confetti {
             "#00c7ff", "#007aff", "#5856d6", "#af52de",
             "#ff2d55", "#ffffff", "#FFE566", "#FFD700",
         ];
+        const fromTop = !!opts.fromTop;
 
         for (let i = 0; i < count; i++) {
             const roll = Math.random();
@@ -32,11 +33,17 @@ export default class Confetti {
             const speed = 4 + Math.random() * 14;
 
             this.particles.push({
-                x,
-                y,
-                vx: Math.cos(angle) * speed * (0.6 + Math.random() * 0.8),
-                vy: Math.sin(angle) * speed * 0.5 - (6 + Math.random() * 10),
-                gravity: 0.16 + Math.random() * 0.10,
+                x: fromTop ? (x + (Math.random() - 0.5) * (opts.spread ?? 360)) : x,
+                y: fromTop ? (y - Math.random() * 40) : y,
+                vx: fromTop
+                    ? (Math.random() - 0.5) * 3.5
+                    : Math.cos(angle) * speed * (0.6 + Math.random() * 0.8),
+                vy: fromTop
+                    ? (1.5 + Math.random() * 3.5)
+                    : Math.sin(angle) * speed * 0.5 - (6 + Math.random() * 10),
+                gravity: fromTop
+                    ? 0.08 + Math.random() * 0.06
+                    : 0.16 + Math.random() * 0.10,
                 drag: 0.988 + Math.random() * 0.008,
                 rotation: Math.random() * Math.PI * 2,
                 rotationSpeed: (Math.random() - 0.5) * 0.4,
@@ -55,9 +62,65 @@ export default class Confetti {
                         ? 2 + Math.random() * 2
                         : 4 + Math.random() * 5,
                 life: 1,
-                fade: 0.004 + Math.random() * 0.006,
+                fade: fromTop
+                    ? 0.0025 + Math.random() * 0.003
+                    : 0.004 + Math.random() * 0.006,
                 sparkle: Math.random() * Math.PI * 2,
             });
+        }
+    }
+
+    /**
+     * Continuous top-down confetti rain (champion screen).
+     * Appends particles; does not clear existing ones.
+     */
+    rain(canvasWidth, count = 16) {
+        const colors = [
+            "#ff3b30", "#ff9500", "#ffcc00", "#34c759",
+            "#00c7ff", "#007aff", "#5856d6", "#af52de",
+            "#ff2d55", "#ffffff", "#FFE566", "#FFD700",
+        ];
+        const w = canvasWidth || 400;
+
+        for (let i = 0; i < count; i++) {
+            const roll = Math.random();
+            let shape = "square";
+            if (roll > 0.55) shape = "ribbon";
+            else if (roll > 0.30) shape = "circle";
+            else if (roll > 0.15) shape = "glitter";
+
+            this.particles.push({
+                x: Math.random() * w,
+                y: -10 - Math.random() * 30,
+                vx: (Math.random() - 0.5) * 2.8,
+                vy: 1.2 + Math.random() * 3.2,
+                gravity: 0.07 + Math.random() * 0.05,
+                drag: 0.990 + Math.random() * 0.006,
+                rotation: Math.random() * Math.PI * 2,
+                rotationSpeed: (Math.random() - 0.5) * 0.35,
+                wobble: Math.random() * Math.PI * 2,
+                wobbleSpeed: 0.03 + Math.random() * 0.05,
+                color: colors[Math.floor(Math.random() * colors.length)],
+                shape,
+                width: shape === "ribbon"
+                    ? 3 + Math.random() * 5
+                    : shape === "glitter"
+                        ? 2 + Math.random() * 2
+                        : 4 + Math.random() * 5,
+                height: shape === "ribbon"
+                    ? 10 + Math.random() * 12
+                    : shape === "glitter"
+                        ? 2 + Math.random() * 2
+                        : 4 + Math.random() * 5,
+                life: 1,
+                fade: 0.002 + Math.random() * 0.0025,
+                sparkle: Math.random() * Math.PI * 2,
+            });
+        }
+
+        // Cap particle count for performance
+        if (this.particles.length > 420) {
+            this.particles = this.particles.slice(-420);
         }
     }
 

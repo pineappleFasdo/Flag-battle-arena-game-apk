@@ -21,14 +21,15 @@ export default class ArenaPhysics {
         this.segmentCount = 48;
         this.thickness    = 22;
 
-        this.initialGapSize = 4;   // scaled for fewer segments (was 7 @ 96)
-        this.maxGapSize     = 12;  // scaled for fewer segments (was 22 @ 96)
+        // Fixed small gap for ALL qualifying rounds (no widen over time)
+        this.initialGapSize = 3;
+        this.maxGapSize     = 3;
         this.gapSize        = 0;
 
         this.state           = STATE_INTRO;
         this.introDuration   = 180;
         this.introTimer      = 0;
-        this.openingDuration = 90;
+        this.openingDuration = 200; // gradual open to the fixed small gap
         this.openingTimer    = 0;
 
         this.remainingFlags = 50;
@@ -55,7 +56,7 @@ export default class ArenaPhysics {
                 {
                     isStatic    : true,
                     angle       : segAngle,
-                    restitution : 0.95,
+                    restitution : 1.0,
                     friction    : 0,
                     label       : "arenaWall"
                 }
@@ -75,14 +76,11 @@ export default class ArenaPhysics {
 
     setRemainingFlags(count) {
         this.remainingFlags = count;
-        if (this.state !== STATE_PLAYING) return;
-
-        const eliminated = this.totalFlags - count;
-        const t = Math.max(0, Math.min(1, eliminated / Math.max(1, this.totalFlags - 1)));
-        const eased = 1 - Math.pow(1 - t, 1.6);
-        this.gapSize = Math.round(
-            this.initialGapSize + (this.maxGapSize - this.initialGapSize) * eased
-        );
+        // Gap size stays FIXED for the whole tournament (qualifying + final).
+        // No progressive widen — round 1 and round 32 use the same small gap.
+        if (this.state === STATE_PLAYING && this.gapSize !== this.initialGapSize) {
+            this.gapSize = this.initialGapSize;
+        }
     }
 
 
@@ -144,9 +142,10 @@ export default class ArenaPhysics {
         } else if (this.state === STATE_OPENING) {
             this.openingTimer++;
             const t = Math.min(1, this.openingTimer / this.openingDuration);
-            const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-            this.gapSize       = Math.round(this.initialGapSize * eased);
-            this.rotationSpeed = 0.024;
+            // Slow ease-out: gap creeps open gradually instead of snapping wide
+            const eased = 1 - Math.pow(1 - t, 2.4);
+            this.gapSize       = Math.max(1, Math.round(this.initialGapSize * eased));
+            this.rotationSpeed = 0.022;
 
             if (this.openingTimer >= this.openingDuration) {
                 this.state   = STATE_PLAYING;

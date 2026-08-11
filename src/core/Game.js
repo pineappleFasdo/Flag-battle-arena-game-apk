@@ -115,10 +115,24 @@ export default class Game {
         this._spawnTotal     = 0;
         this._spawnPerFrame  = 12;
 
-        // ── Final-mode elimination card ───────────────────────────────────
+        // ── Final-mode elimination card (legacy pause path kept for safety) ─
         this._elimShowCountry  = null;
         this._elimShowStart    = 0;
         this._elimShowDuration = 2800;
+
+        // LAST FLAG STANDING sequential elim (video-matched pacing):
+        // one flag exits → gap seals → ELIMINATED card → settle/wobble with
+        // "LAST FLAG STANDING" center text → gap reopens → next exit
+        this._elimFlashQueue   = [];   // { country, remaining, start }
+        this._ELIM_FLASH_MS    = 2400; // phase 1: ELIMINATED card duration
+        this._SETTLE_MS        = 2800; // phase 2: wobble + LAST FLAG STANDING
+        this._finalElimFreeze  = false; // gap sealed, no further drains
+        this._finalElimFreezeUntil = 0;
+        this._finalElimActive  = null;  // currently displayed elim { country, remaining }
+        this._finalElimPhase   = null;  // "elim" | "settle" | null
+
+        // Final-mode stalemate clock (mirrors WinnerManager qualifying logic)
+        this._finalStalemateSince = 0;
     }
 
     get _lw() { return this._logicalW || this.canvas.width; }
@@ -162,7 +176,14 @@ export default class Game {
     _pickQualifyBatch() {
         // Refill if pool is running low
         if (this._qualifyPool.length < 2) {
-            // All countries now have wins — shuffle winners back in
+            // All countries now have wins — shuffle winners back in and start a
+            // new cycle. This is the normal path when all 249 countries have won
+            // at least once before 40 mins is up; rounds simply continue.
+            console.log(
+                `[Pool] All ${this.allCountries.length} countries have won at least once.` +
+                ` Recycling pool for a new qualifying cycle.` +
+                ` Session time remaining: ${Math.round((this.QUALIFY_DURATION_MS - (Date.now() - this.sessionStartTime)) / 1000)}s`
+            );
             this._qualifyPool = this._shuffle([...this._qualifyWinners, ...this._qualifyPool]);
             this._qualifyWinners = [];
         }
@@ -293,7 +314,9 @@ export default class Game {
             }
         }
 
-        this.eventManager.pick();
+        // Qualifying keeps random events; final uses dedicated LAST STANDING physics
+        if (this.isFinalMode) this.eventManager.pickLastStanding();
+        else this.eventManager.pick();
 
         const displayDuration = (isTie && winner.isSilent) ? 500 : this.winnerDisplayDuration;
         this.restartTimer = setTimeout(() => this._beginNextEvent(), displayDuration);
@@ -327,10 +350,16 @@ export default class Game {
     _beginNextEvent() {
         this.gameState      = "NEXT_EVENT";
         this.nextEventTimer = 0;
+        this._elimFlashQueue = [];
+        this._finalElimFreeze = false;
+        this._finalElimActive = null;
+        this._finalElimFreezeUntil = 0;
+        this._finalElimPhase = null;
 
         if (this.isFinalMode) {
-            // Final mode: arena has remaining finalists only
+            // Final mode: LAST STANDING event (video-matched sequential exits)
             this.activeCountries = this._finalists.map(f => f.country);
+            this.eventManager.pickLastStanding();
         } else {
             // Qualifying mode: take next batch from pool
             // (winners have already been removed from the pool by handleWinner)
@@ -344,7 +373,10 @@ export default class Game {
             this.layout.arenaX, this.layout.arenaY, spawnRadius, this.totalCountries
         );
         this._nextSpawnPositions = positions;
-        this._nextFlagW = Math.max(6, spacing * 0.82);
+        // Cap flag size so final round (few countries) matches qualify size
+        const rawW = Math.max(6, spacing * 0.82);
+        const maxW = this.isFinalMode ? 14 : 22;
+        this._nextFlagW = Math.min(rawW, maxW);
         this._nextFlagH = Math.max(4, this._nextFlagW * 0.70);
 
         this._clearAllFlags();
@@ -398,6 +430,12 @@ export default class Game {
         this._grandChampion    = null;
         this._champCountdownRemain = this._champCountdownSec;
         this._elimShowCountry  = null;
+        this._elimFlashQueue   = [];
+        this._finalElimFreeze  = false;
+        this._finalElimActive  = null;
+        this._finalElimFreezeUntil = 0;
+        this._finalElimPhase   = null;
+        this._finalStalemateSince = 0;
 
         // Fresh qualifying pool — all countries eligible again
         this._initQualifyPool();
@@ -437,9 +475,15 @@ export default class Game {
         this.arena.introTimer    = 0;
         this.arena.introDuration = 99999;
         this.arena.gapSize       = 0;
+        // Lock gap to fixed small size every round (never widens over session)
+        if (!this.isFinalMode) {
+            this.arena.initialGapSize = 3;
+            this.arena.maxGapSize     = 3;
+        }
         this.arena.syncWalls();
 
         this.winnerManager.reset();
+        this._finalStalemateSince = 0;
 
         this._spawnPositions = this._nextSpawnPositions;
         this._spawnFlagW     = this._nextFlagW;
@@ -524,7 +568,24 @@ export default class Game {
 
     update() {
         if (this.gameState === "START_SCREEN")   return;
-        if (this.gameState === "GRAND_CHAMPION") return;
+
+        // Keep confetti alive + raining during champion screen
+        if (this.gameState === "GRAND_CHAMPION") {
+            this.confetti.update();
+            this._champConfettiTick = (this._champConfettiTick || 0) + 1;
+            // Respawn a light top rain every ~20 frames so it never dies out
+            if (this._champConfettiTick % 20 === 0) {
+                this.confetti.rain(this._lw, 18);
+            }
+            // Occasional clap/confetti burst for celebration feel
+            if (this._champConfettiTick % 90 === 0) {
+                this.audio.playConfetti();
+            }
+            if (this._champConfettiTick % 150 === 0) {
+                this.audio.playClap();
+            }
+            return;
+        }
 
         if (this.gameState === "ELIM_SHOW") {
             const elapsed = Date.now() - this._elimShowStart;
@@ -572,30 +633,64 @@ export default class Game {
             this.flagManager.update(this.arena);
 
             if (!this.arena.isIntro) {
-                const countBefore = this.flagManager.flags.length;
-                this.eliminationManager.update(this.flagManager);
-                const countAfter  = this.flagManager.flags.length;
+                // Final-mode freeze: gap sealed during ELIMINATED card + settle
+                if (this.isFinalMode && this._finalElimFreeze) {
+                    // Hard-lock gap closed every frame (prevents event/arena from reopening)
+                    if (this.arena.gapSize !== 0) {
+                        this.arena.gapSize = 0;
+                        this.arena.syncWalls();
+                    }
 
-                if (countAfter < countBefore) {
-                    this.audio.playElimination();
-                    this.audio.playMilestone(countAfter, this.totalCountries);
+                    const now = Date.now();
+                    if (this._finalElimPhase === "elim" && now >= this._finalElimFreezeUntil) {
+                        // Switch to settle: flags wobble, "LAST FLAG STANDING" center
+                        this._finalElimPhase = "settle";
+                        this._finalElimActive = null;
+                        this._elimFlashQueue = [];
+                        this._finalElimFreezeUntil = now + this._SETTLE_MS;
+                    } else if (this._finalElimPhase === "settle" && now >= this._finalElimFreezeUntil) {
+                        this._endFinalElimFreeze();
+                    }
+
+                    // Keep remaining flags inside + gentle damp (no exits during card)
+                    if (evenFrame) {
+                        this._containFlagsDuringFreeze();
+                    }
+                } else {
+                    const countBefore = this.flagManager.flags.length;
+                    this.eliminationManager.update(this.flagManager);
+                    const countAfter  = this.flagManager.flags.length;
+
+                    if (countAfter < countBefore) {
+                        this.audio.playElimination();
+                        this.audio.playMilestone(countAfter, this.totalCountries);
+                    }
+
+                    this.arena.setRemainingFlags(countAfter);
+
+                    // Skip classic drain in final mode — LastStandingEvent owns forces
+                    // (avoids double tangential pull that creates rim-snake motion)
+                    if (evenFrame && !this.isFinalMode) {
+                        this.drain.update();
+                        this.drain.applyDrainForce(this.flagManager.flags);
+                    } else if (evenFrame && this.isFinalMode) {
+                        this.drain.update(); // sensor position only
+                    }
+
+                    // Final mode: sequential one-flag eliminations
+                    if (this.isFinalMode && countAfter < countBefore) {
+                        this._handleFinalElimination();
+                        if (this.gameState !== "PLAYING") return;
+                    }
                 }
 
-                this.arena.setRemainingFlags(countAfter);
-
-                if (evenFrame) {
-                    this.drain.update();
-                    this.drain.applyDrainForce(this.flagManager.flags);
-                }
-
-                // Final mode: pause after every elimination
-                if (this.isFinalMode && countAfter < countBefore) {
-                    this._handleFinalElimination();
-                    return;
+                if (this.isFinalMode) {
+                    this._updateElimFlashes();
+                    if (evenFrame && !this._finalElimFreeze) this._checkFinalStalemate();
                 }
             }
 
-            // Qualifying: normal winner detection
+            // Qualifying: normal winner detection (includes stalemate → tie)
             if (!this.isFinalMode && evenFrame) {
                 this.winnerManager.update(this.flagManager, this.eliminationManager);
             }
@@ -605,64 +700,257 @@ export default class Game {
         this.fx.update();
     }
 
-    // ── Final mode elimination ────────────────────────────────────────────────
+    // ── Final mode stalemate (few flags jammed, never exiting) ────────────────
+    // Mirrors WinnerManager qualifying stalemate: after ~2.5s of near-stillness
+    // with 2–8 flags left, treat as a full-tie and replay the final round.
 
-    _handleFinalElimination() {
+    _checkFinalStalemate() {
+        const flags = this.flagManager?.flags;
+        if (!flags || flags.length < 2 || flags.length > 8) {
+            this._finalStalemateSince = 0;
+            return;
+        }
+
+        let maxSpd = 0;
+        for (let i = 0; i < flags.length; i++) {
+            const v = flags[i].body?.velocity;
+            if (!v) continue;
+            const s = Math.hypot(v.x, v.y);
+            if (s > maxSpd) maxSpd = s;
+        }
+
+        if (maxSpd >= 0.55) {
+            this._finalStalemateSince = 0;
+            return;
+        }
+
+        const now = performance.now();
+        if (!this._finalStalemateSince) {
+            this._finalStalemateSince = now;
+            return;
+        }
+        if (now - this._finalStalemateSince < 2500) return;
+
+        this._finalStalemateSince = 0;
         this.eventManager.end(this._eventCtx());
 
-        const eliminated = this.eliminationManager.eliminated;
-        const justElim   = eliminated[eliminated.length - 1];
+        // Same path as simultaneous full drain: keep these finalists, replay.
+        const stuck = flags.slice();
+        this._finalists = stuck.map(f => ({ country: f.country }));
+        const tieCount = stuck.length;
+        this.audio.speak(
+            tieCount === 2
+                ? `${stuck[0].country.name} and ${stuck[1].country.name} stalemate — replaying!`
+                : `${tieCount} countries stalemate — replaying!`
+        );
+        this._beginNextEvent();
+    }
 
-        if (justElim) {
-            this._finalists = this._finalists.filter(
-                f => f.country.code !== justElim.country.code
-            );
-            this._finalEliminated.push({ country: justElim.country });
+    // ── Final mode elimination (LAST FLAG STANDING — video matched) ──────────
+    // STRICT: one flag per exit. Extra simultaneous exits are pushed back in.
+    // Gap seals (arena rebuilds solid), center ELIMINATED card shows the flag,
+    // then gap reopens. Qualifying round logic is intentionally untouched.
+
+    _handleFinalElimination() {
+        if (this._finalElimFreeze) return;
+
+        const eliminated = this.eliminationManager.eliminated;
+        const batchSize  = this.eliminationManager._lastBatchSize || 1;
+        if (batchSize < 1) return;
+
+        // Flags that left the arena this frame
+        const batch = eliminated.slice(-batchSize);
+
+        // ── One flag only ──────────────────────────────────────────────────
+        const primary = batch[0];
+        const extras  = batch.slice(1);
+
+        // Push any extra simultaneous exits back inside the arena
+        if (extras.length) {
+            this._pushFlagsBackInside(extras);
+        }
+
+        // Officially eliminate only the primary flag
+        const code = primary.country.code;
+        this._finalists = this._finalists.filter(f => f.country.code !== code);
+        this._finalEliminated.push({ country: primary.country });
+
+        // Strip extras from eliminationManager.eliminated so they aren't counted
+        if (extras.length) {
+            const extraCodes = new Set(extras.map(f => f.country.code));
+            this.eliminationManager.eliminated =
+                this.eliminationManager.eliminated.filter(
+                    f => !extraCodes.has(f.country.code)
+                );
         }
 
         const remaining = this._finalists.length;
 
-        if (remaining <= 1) {
-            const champ = remaining === 1
-                ? this._finalists[0].country
-                : (justElim?.country ?? null);
-            this._triggerGrandChampion(champ);
+        if (remaining === 0) {
+            // Shouldn't happen with one-at-a-time, but safety: treat as tie replay
+            this._finalists = [{ country: primary.country }, ...extras.map(f => ({ country: f.country }))];
+            this._finalEliminated = this._finalEliminated.filter(e => e.country.code !== code);
+            this._elimFlashQueue = [];
+            this._finalElimActive = null;
+            this._finalElimPhase = null;
+            this._finalElimFreeze = false;
+            this._beginNextEvent();
             return;
         }
 
-        // Close the gap, settle flags, show elimination card
-        this.arena.gapSize = 0;
-        this.arena.state   = "INTRO";
-        this.arena.syncWalls();
-
-        for (const flag of this.flagManager.flags) {
-            const b = flag.body;
-            Matter.Body.setVelocity(b, { x: b.velocity.x * 0.35, y: b.velocity.y * 0.35 });
-            Matter.Body.setAngularVelocity(b, b.angularVelocity * 0.35);
+        if (remaining === 1) {
+            this._elimFlashQueue = [];
+            this._finalElimActive = null;
+            this._finalElimPhase = null;
+            this._finalElimFreeze = false;
+            this._triggerGrandChampion(this._finalists[0].country);
+            return;
         }
+
+        // Seal the gap (arena rebuilds solid ring) while card shows
+        this._startFinalElimFreeze(primary.country, remaining);
 
         this.arena.setRemainingFlags(this.flagManager.flags.length);
         this.totalCountries = this._finalists.length;
 
-        this._elimShowCountry = justElim?.country ?? null;
-        this._elimShowStart   = Date.now();
-        this.gameState        = "ELIM_SHOW";
-
-        if (this._elimShowCountry?.name) {
-            this.audio.speak(`${this._elimShowCountry.name} has been eliminated!`);
+        if (primary.country?.name) {
+            this.audio.speak(`${primary.country.name} eliminated!`);
         }
     }
 
+    /** Teleport flags that accidentally exited back inside the ring. */
+    _pushFlagsBackInside(flags) {
+        const cx = this.arena.cx;
+        const cy = this.arena.cy;
+        const R  = this.arena.radius * 0.72;
+
+        for (const flag of flags) {
+            const body = flag.body;
+            if (!body) continue;
+
+            // Random position inside the ring so they rejoin the pack
+            const ang = Math.random() * Math.PI * 2;
+            const dist = R * (0.25 + Math.random() * 0.55);
+            Matter.Body.setPosition(body, {
+                x: cx + Math.cos(ang) * dist,
+                y: cy + Math.sin(ang) * dist,
+            });
+            Matter.Body.setVelocity(body, {
+                x: (Math.random() - 0.5) * 2.5,
+                y: (Math.random() - 0.5) * 2.5,
+            });
+            Matter.Body.setAngularVelocity(body, (Math.random() - 0.5) * 0.2);
+            Matter.Sleeping.set(body, false);
+
+            // Re-add to world + flag list
+            Matter.World.add(this.physics.world, body);
+            this.flagManager.flags.push(flag);
+        }
+    }
+
+    /** Seal gap and show center ELIMINATED card for one flag. */
+    _startFinalElimFreeze(country, remaining) {
+        const now = Date.now();
+        this._finalElimFreeze = true;
+        this._finalElimPhase = "elim";
+        this._finalElimFreezeUntil = now + this._ELIM_FLASH_MS;
+        this._finalElimActive = { country, remaining, start: now };
+        this._elimFlashQueue = [{ country, remaining, start: now }];
+
+        // Seal arena: zero gap, full wall ring — flags stay in and wobble
+        this.arena.gapSize = 0;
+        this.arena.syncWalls();
+
+        // Yank every remaining flag firmly inside so none slip out mid-card
+        this._containFlagsDuringFreeze(true);
+    }
+
+    /**
+     * Keep all live flags inside the ring during elim freeze.
+     * @param {boolean} hard — stronger inward reset right after an exit
+     */
+    _containFlagsDuringFreeze(hard = false) {
+        const cx = this.arena.cx;
+        const cy = this.arena.cy;
+        const R  = this.arena.radius;
+        const limit = R * 0.82;
+
+        for (const f of this.flagManager.flags) {
+            const b = f.body;
+            if (!b) continue;
+
+            const dx = b.position.x - cx;
+            const dy = b.position.y - cy;
+            const dist = Math.hypot(dx, dy) || 0.001;
+
+            if (dist > limit) {
+                const s = (limit * 0.9) / dist;
+                Matter.Body.setPosition(b, {
+                    x: cx + dx * s,
+                    y: cy + dy * s,
+                });
+                // Kill outward velocity so they don't immediately re-exit
+                const vx = b.velocity.x;
+                const vy = b.velocity.y;
+                const radial = (vx * dx + vy * dy) / dist;
+                if (radial > 0) {
+                    Matter.Body.setVelocity(b, {
+                        x: vx - (dx / dist) * radial,
+                        y: vy - (dy / dist) * radial,
+                    });
+                }
+            }
+
+            if (hard) {
+                Matter.Body.setVelocity(b, {
+                    x: b.velocity.x * 0.45,
+                    y: b.velocity.y * 0.45,
+                });
+            } else {
+                Matter.Body.setVelocity(b, {
+                    x: b.velocity.x * 0.96,
+                    y: b.velocity.y * 0.96,
+                });
+            }
+            Matter.Sleeping.set(b, false);
+        }
+    }
+
+    /** Reopen gap after elim card + settle — next elimination can happen. */
+    _endFinalElimFreeze() {
+        this._finalElimFreeze = false;
+        this._finalElimPhase = null;
+        this._finalElimActive = null;
+        this._elimFlashQueue = [];
+        this._finalStalemateSince = 0;
+
+        // Fixed small gap — same as qualifying
+        this.arena.gapSize = 3;
+        this.arena.initialGapSize = 3;
+        this.arena.maxGapSize = 3;
+        this.arena.state = "PLAYING";
+        this.arena.syncWalls();
+    }
+
     _afterElimShow() {
+        // Legacy path retained if anything still enters ELIM_SHOW
         this._elimShowCountry = null;
-        this.eventManager.pick();
+        this._finalStalemateSince = 0;
         this.arena.state   = "PLAYING";
         this.arena.gapSize = this.arena.initialGapSize;
         this.arena.syncWalls();
         this.gameState = "PLAYING";
-        this.eventManager.start(this._eventCtx());
         this.audio.playRoundStart();
         this._finalRoundNumber++;
+    }
+
+    /** Expire finished elim flashes (called from update while PLAYING). */
+    _updateElimFlashes() {
+        if (!this._elimFlashQueue.length) return;
+        const now = Date.now();
+        this._elimFlashQueue = this._elimFlashQueue.filter(
+            item => now - item.start < this._ELIM_FLASH_MS + 50
+        );
     }
 
     // ── Grand Champion ────────────────────────────────────────────────────────
@@ -672,12 +960,16 @@ export default class Game {
         this.gameState           = "GRAND_CHAMPION";
         this._champDisplayStart  = Date.now();
         this._champCountdownRemain = this._champCountdownSec;
+        this._champConfettiTick  = 0;
 
         this._clearAllFlags();
         this.eventManager.end(this._eventCtx());
 
-        this.confetti.start(this._lw / 2, this._lh * 0.36, 300);
+        // Continuous rain of confetti from the top + celebration audio
+        this.confetti.start(this._lw / 2, this._lh * 0.08, 220, { fromTop: true });
         this.audio.playWinner();
+        this.audio.playClap();
+        this.audio.playConfetti();
         if (country?.name) this.audio.speak(`${country.name} is the Grand Final Champion!`);
 
         this._champCountdownTimer = setInterval(() => {
@@ -694,7 +986,7 @@ export default class Game {
 
     draw() {
         const { ctx } = this;
-        ctx.fillStyle = "#111";
+        ctx.fillStyle = "#050816";
         ctx.fillRect(0, 0, this._lw, this._lh);
 
         if (this.gameState === "START_SCREEN") return;
@@ -748,6 +1040,15 @@ export default class Game {
         this.fx.draw(ctx, this._lw, this._lh);
         this._drawCentralOverlay(ctx);
 
+        // Continuous final-mode elim flash (video-style, physics keeps running)
+        if (this.isFinalMode && this._finalElimPhase === "elim" &&
+            (this._finalElimActive || this._elimFlashQueue.length)) {
+            this._drawElimFlashOverlay(ctx);
+        }
+        if (this.isFinalMode && this._finalElimPhase === "settle") {
+            this._drawLastStandingSettle(ctx);
+        }
+
         if (this.gameState === "ELIM_SHOW") {
             this._drawElimShowCard(ctx);
             this.confetti.draw(ctx);
@@ -783,23 +1084,30 @@ export default class Game {
         ctx.save();
         ctx.textAlign    = "center";
         ctx.textBaseline = "bottom";
-        ctx.shadowColor  = "rgba(0,0,0,0.8)";
-        ctx.shadowBlur   = 8;
+        ctx.shadowColor  = "rgba(0,0,0,0.75)";
+        ctx.shadowBlur   = 6;
         const labelSize = Math.min(this._lw * 0.030, 13);
-        ctx.font = `600 ${labelSize}px system-ui, Arial, sans-serif`;
+        ctx.font = `700 ${labelSize}px system-ui, Arial, sans-serif`;
 
         if (this.isFinalMode) {
-            ctx.fillStyle = "rgba(40,200,255,0.90)";
-            ctx.fillText(`🏆 GRAND FINAL · Round ${this._finalRoundNumber} · ${this._finalists.length} remaining`, cx, aboveY);
+            // Match reference stream branding + dedicated event name
+            ctx.fillStyle = "#91A7C9";
+            ctx.fillText(
+                `LAST FLAG STANDING  ·  LAST STANDING  ·  ${this._finalists.length} FLAGS`,
+                cx, aboveY
+            );
         } else if (this.sessionStartTime > 0) {
             const elapsed   = Date.now() - this.sessionStartTime;
             const remaining = Math.max(0, this.QUALIFY_DURATION_MS - elapsed);
             const mins = Math.floor(remaining / 60000);
             const secs = Math.floor((remaining % 60000) / 1000);
-            // Show how many unique winners (countries sitting on bench) so far
             const winnersCount = this._qualifyWinners.length;
-            ctx.fillStyle = "rgba(180,210,255,0.70)";
-            ctx.fillText(`QUALIFYING · ${mins}:${secs.toString().padStart(2,"0")} · Round ${this.roundNumber} · ${winnersCount} qualified`, cx, aboveY);
+            // Professional sports broadcast title
+            ctx.fillStyle = "#91A7C9";
+            ctx.fillText(
+                `${this.totalCountries}-COUNTRY FLAGS BATTLE  ·  ${mins}:${secs.toString().padStart(2,"0")}  ·  R${this.roundNumber}  ·  ${winnersCount} Q`,
+                cx, aboveY
+            );
         }
         ctx.restore();
     }
@@ -818,7 +1126,7 @@ export default class Game {
 
         ctx.save();
         ctx.globalAlpha = alpha;
-        ctx.fillStyle   = "rgba(0,0,0,0.42)";
+        ctx.fillStyle   = "rgba(5, 8, 22, 0.55)";
         ctx.fillRect(0, 0, this._lw, this._lh);
         ctx.translate(cx, cy);
         ctx.scale(scale, scale);
@@ -829,38 +1137,41 @@ export default class Game {
         const cardX = cx - cardW / 2;
         const cardY = cy - cardH / 2;
 
-        ctx.fillStyle = "rgba(8, 10, 22, 0.92)";
+        // Dark-blue broadcast panel
+        ctx.fillStyle = "#101D38";
         ctx.beginPath();
-        if (typeof ctx.roundRect === "function") ctx.roundRect(cardX, cardY, cardW, cardH, 16);
+        if (typeof ctx.roundRect === "function") ctx.roundRect(cardX, cardY, cardW, cardH, 12);
         else ctx.rect(cardX, cardY, cardW, cardH);
         ctx.fill();
-        ctx.strokeStyle = this._hexToRgba(ev.color, 0.55);
-        ctx.lineWidth   = 2;
+        // Electric-blue border (event badge style)
+        ctx.strokeStyle = "#2E62E8";
+        ctx.lineWidth   = 1.5;
         ctx.stroke();
 
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
-        ctx.shadowColor  = "rgba(0,0,0,0.95)";
-        ctx.shadowBlur   = 12;
+        ctx.shadowColor  = "rgba(0,0,0,0.85)";
+        ctx.shadowBlur   = 10;
 
         const titleSize = Math.min(this._lw * 0.028, 22);
-        ctx.font = `700 ${titleSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = this.isFinalMode ? "rgba(40,200,255,0.95)" : "rgba(255,215,0,0.95)";
-        ctx.fillText(this.isFinalMode ? "🏆 GRAND FINAL" : "NEXT EVENT", cx, cy - cardH * 0.28);
+        ctx.font = `800 ${titleSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#38D5FF";
+        ctx.fillText(this.isFinalMode ? "LAST FLAG STANDING" : "NEXT BATTLE", cx, cy - cardH * 0.28);
 
         const pulse    = 1 + 0.04 * Math.sin(timer * 0.1);
         const iconSize = Math.min(this._lw * 0.08, 52) * pulse;
         ctx.font       = `${iconSize}px system-ui, Arial, sans-serif`;
-        ctx.shadowBlur = 20;
-        ctx.fillText(this.isFinalMode ? "🏆" : ev.icon, cx, cy - 4);
+        ctx.shadowBlur = 14;
+        ctx.fillText(this.isFinalMode ? "🏳️" : ev.icon, cx, cy - 4);
 
-        const eventSize = Math.min(this._lw * 0.055, 42);
+        // Event name badge strip
+        const eventSize = Math.min(this._lw * 0.048, 36);
         ctx.font = `900 ${eventSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle   = this.isFinalMode ? "#00CFFF" : ev.color;
-        ctx.shadowColor = this.isFinalMode ? "rgba(40,180,255,0.5)" : this._hexToRgba(ev.color, 0.5);
-        ctx.shadowBlur  = 22;
+        ctx.fillStyle   = this.isFinalMode ? "#FFC83D" : "#F4F7FF";
+        ctx.shadowColor = "rgba(61, 124, 255, 0.35)";
+        ctx.shadowBlur  = 12;
         ctx.fillText(
-            this.isFinalMode ? `${this._finalists.length} Countries Remain` : ev.name,
+            this.isFinalMode ? `LAST STANDING  ·  ${this._finalists.length} FLAGS` : ev.name,
             cx, cy + cardH * 0.28
         );
         ctx.restore();
@@ -879,53 +1190,275 @@ export default class Game {
         ctx.save();
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
-        ctx.shadowColor  = "rgba(0,0,0,0.95)";
-        ctx.shadowBlur   = 14;
+        ctx.shadowColor  = "rgba(0,0,0,0.90)";
+        ctx.shadowBlur   = 10;
 
-        // Row 1: ROUND N — big gold
-        const roundSize = Math.min(this._lw * 0.11, 72);
-        ctx.font = `900 ${roundSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle   = this.isFinalMode ? "#00CFFF" : "#FFD700";
-        ctx.shadowColor = this.isFinalMode ? "rgba(40,200,255,0.7)" : "rgba(255,200,0,0.7)";
-        ctx.shadowBlur  = 20;
+        // Broadcast transition label
+        const labelSize = Math.min(this._lw * 0.045, 28);
+        ctx.font = `800 ${labelSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = "#38D5FF";
+        ctx.shadowColor = "rgba(61, 124, 255, 0.40)";
+        ctx.shadowBlur  = 10;
+        ctx.fillText("NEXT BATTLE", cx, cy - 100);
+
+        // Event badge — dark-blue panel with electric-blue border
+        const badgeW = Math.min(this._lw * 0.55, 280);
+        const badgeH = Math.min(this._lh * 0.055, 36);
+        const badgeX = cx - badgeW / 2;
+        const badgeY = cy - 72;
+        ctx.fillStyle = "#101D38";
+        ctx.beginPath();
+        if (typeof ctx.roundRect === "function") ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 8);
+        else ctx.rect(badgeX, badgeY, badgeW, badgeH);
+        ctx.fill();
+        ctx.strokeStyle = "#2E62E8";
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+
+        const evNameSize = Math.min(this._lw * 0.038, 20);
+        ctx.font = `700 ${evNameSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = "#F4F7FF";
+        ctx.shadowBlur  = 0;
         ctx.fillText(
-            this.isFinalMode ? `🏆 FINAL ${this._finalRoundNumber}` : `ROUND ${this.roundNumber}`,
-            cx, cy - 95
+            this.isFinalMode
+                ? `🏳️  LAST STANDING  ·  ${this._finalists.length} FLAGS`
+                : `${ev.icon}  ${ev.name}`,
+            cx, badgeY + badgeH / 2
         );
 
-        // Row 2: event name in event color
-        const evNameSize = Math.min(this._lw * 0.065, 44);
-        ctx.font = `900 ${evNameSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle   = this.isFinalMode ? "rgba(140,220,255,0.95)" : ev.color;
-        ctx.shadowColor = this.isFinalMode ? "rgba(40,180,255,0.6)" : this._hexToRgba(ev.color, 0.6);
-        ctx.shadowBlur  = 18;
+        // Flag count metadata
+        const countSize = Math.min(this._lw * 0.032, 18);
+        ctx.font = `600 ${countSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle   = "#91A7C9";
+        ctx.shadowColor = "rgba(0,0,0,0.8)";
+        ctx.shadowBlur  = 6;
         ctx.fillText(
-            this.isFinalMode ? `${this._finalists.length} Countries` : `${ev.icon}  ${ev.name}`,
-            cx, cy - 38
+            this.isFinalMode ? "LAST FLAG STANDING" : `${this.totalCountries}-COUNTRY FLAGS BATTLE`,
+            cx, cy - 22
         );
 
-        // Row 3: flag count
-        const countSize = Math.min(this._lw * 0.038, 24);
-        ctx.font = `700 ${countSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle   = "rgba(255,255,255,0.70)";
-        ctx.shadowColor = "rgba(0,0,0,0.9)";
-        ctx.shadowBlur  = 8;
-        ctx.fillText(`${this.totalCountries} FLAGS`, cx, cy + 10);
-
-        // Countdown number
+        // Countdown number — white + subtle blue glow + blue border ring
         ctx.save();
-        ctx.translate(cx, cy + 75);
+        ctx.translate(cx, cy + 55);
         ctx.scale(numScale, numScale);
-        const numSize = Math.min(this._lw * 0.20, 120);
+        const numSize = Math.min(this._lw * 0.18, 110);
+
+        // Soft blue ring behind number
+        const ringR = numSize * 0.72;
+        ctx.beginPath();
+        ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(46, 98, 232, 0.55)";
+        ctx.lineWidth   = 2.5;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, ringR + 6, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(61, 124, 255, 0.20)";
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+
         ctx.font = `900 ${numSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle   = this.isFinalMode ? "#00CFFF" : "#FFD700";
-        ctx.shadowColor = "rgba(0,0,0,0.90)";
-        ctx.shadowBlur  = 24;
+        ctx.fillStyle   = "#F4F7FF";
+        ctx.shadowColor = "rgba(0,0,0,0.85)";
+        ctx.shadowBlur  = 16;
         ctx.fillText(String(this.restartCountdown), 0, 0);
-        ctx.shadowColor = this.isFinalMode ? "rgba(40,200,255,0.45)" : "rgba(255,215,0,0.45)";
-        ctx.shadowBlur  = 44;
+        // Subtle blue glow pass
+        ctx.shadowColor = "rgba(61, 124, 255, 0.40)";
+        ctx.shadowBlur  = 28;
         ctx.fillText(String(this.restartCountdown), 0, 0);
         ctx.restore();
+
+        ctx.restore();
+    }
+
+    /**
+     * LAST FLAG STANDING elimination card — matches FlagsBattleOfficial video:
+     * Center of arena: large flag image, "ELIMINATED" above (red),
+     * country name below (white), "N FLAGS LEFT" in gold.
+     * Other flags remain visible around the card.
+     */
+    _drawElimFlashOverlay(ctx) {
+        const now = Date.now();
+        const item = this._finalElimActive
+            || this._elimFlashQueue.find(e => now >= e.start);
+        if (!item) return;
+
+        const elapsed = now - (item.start || now);
+        const dur     = this._ELIM_FLASH_MS;
+        if (elapsed < 0 || elapsed > dur) return;
+
+        let alpha;
+        if      (elapsed < 160)       alpha = elapsed / 160;
+        else if (elapsed > dur - 280) alpha = (dur - elapsed) / 280;
+        else                          alpha = 1;
+        alpha = Math.max(0, Math.min(1, alpha));
+
+        const bounce = this._easeOut(Math.min(1, elapsed / 240));
+        const scale  = 0.85 + 0.15 * bounce;
+        const cx     = this.layout.arenaX;
+        const cy     = this.layout.arenaY;
+        const R      = this.layout.arenaRadius;
+
+        // Soft dark pad behind the card so text/flag read clearly
+        ctx.save();
+        ctx.globalAlpha = alpha * 0.45;
+        ctx.fillStyle   = "#050816";
+        ctx.beginPath();
+        ctx.arc(cx, cy, R * 0.50, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(cx, cy);
+        ctx.scale(scale, scale);
+        ctx.translate(-cx, -cy);
+
+        // Use TOP baseline so stacked elements never overlap
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "top";
+        ctx.shadowColor  = "rgba(0,0,0,0.9)";
+        ctx.shadowBlur   = 12;
+
+        // Vertical stack (clear separation, video match):
+        //   ELIMINATED
+        //   [ FLAG ]
+        //   COUNTRY NAME
+        //   N FLAGS LEFT
+        const elimSize = Math.min(R * 0.12, 26);
+        const flagH    = Math.min(R * 0.28, 80);
+        const flagW    = Math.round(flagH * 1.55);
+        const nameSize = Math.min(R * 0.10, 20);
+        const remSize  = Math.min(R * 0.07, 15);
+        const gap1     = Math.max(12, R * 0.05);  // ELIMINATED → flag
+        const gap2     = Math.max(14, R * 0.055); // flag → name (clear gap)
+        const gap3     = Math.max(8,  R * 0.035); // name → count
+
+        const totalH = elimSize + gap1 + flagH + gap2 + nameSize + gap3 + remSize;
+        let y = cy - totalH / 2;
+
+        // ELIMINATED
+        ctx.font      = `900 ${elimSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#FF5368";
+        ctx.fillText("ELIMINATED", cx, y);
+        y += elimSize + gap1;
+
+        // Flag
+        const flagX = cx - flagW / 2;
+        const flagY = y;
+        const img   = item.country?.image;
+
+        if (img && img.complete && img.naturalWidth > 0) {
+            ctx.save();
+            ctx.shadowColor = "rgba(0,0,0,0.7)";
+            ctx.shadowBlur  = 16;
+            ctx.beginPath();
+            if (typeof ctx.roundRect === "function") {
+                ctx.roundRect(flagX - 2, flagY - 2, flagW + 4, flagH + 4, 5);
+            } else {
+                ctx.rect(flagX - 2, flagY - 2, flagW + 4, flagH + 4);
+            }
+            ctx.fillStyle = "#101D38";
+            ctx.fill();
+            ctx.beginPath();
+            if (typeof ctx.roundRect === "function") {
+                ctx.roundRect(flagX, flagY, flagW, flagH, 4);
+            } else {
+                ctx.rect(flagX, flagY, flagW, flagH);
+            }
+            ctx.clip();
+            ctx.drawImage(img, flagX, flagY, flagW, flagH);
+            ctx.restore();
+            ctx.strokeStyle = "rgba(255,255,255,0.65)";
+            ctx.lineWidth   = 2.5;
+            if (typeof ctx.roundRect === "function") {
+                ctx.beginPath();
+                ctx.roundRect(flagX, flagY, flagW, flagH, 4);
+                ctx.stroke();
+            } else {
+                ctx.strokeRect(flagX, flagY, flagW, flagH);
+            }
+        } else {
+            ctx.fillStyle = "#172B50";
+            ctx.fillRect(flagX, flagY, flagW, flagH);
+        }
+        y += flagH + gap2;
+
+        // Country name — clearly BELOW the flag
+        ctx.font      = `800 ${nameSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#F4F7FF";
+        ctx.shadowBlur = 10;
+        let name = (item.country?.name ?? "").toUpperCase();
+        while (name.length > 2 && ctx.measureText(name).width > R * 1.4) {
+            name = name.slice(0, -1);
+        }
+        ctx.fillText(name, cx, y);
+        y += nameSize + gap3;
+
+        // Remaining count — below country name
+        ctx.font      = `700 ${remSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#FFC83D";
+        ctx.shadowBlur = 8;
+        const left = item.remaining;
+        ctx.fillText(
+            `${left} FLAG${left === 1 ? "" : "S"} LEFT`,
+            cx,
+            y
+        );
+
+        ctx.restore();
+    }
+
+    /**
+     * Settle phase after ELIMINATED card: gap still sealed, flags wobble
+     * inside the ring, soft "LAST FLAG STANDING" title in the center
+     * (video pacing between eliminations).
+     */
+    _drawLastStandingSettle(ctx) {
+        const now = Date.now();
+        const remaining = Math.max(0, this._finalElimFreezeUntil - now);
+        const elapsed = this._SETTLE_MS - remaining;
+        if (elapsed < 0) return;
+
+        let alpha;
+        if      (elapsed < 280)                  alpha = elapsed / 280;
+        else if (remaining < 320)                alpha = remaining / 320;
+        else                                     alpha = 1;
+        alpha = Math.max(0, Math.min(1, alpha));
+
+        const cx = this.layout.arenaX;
+        const cy = this.layout.arenaY;
+        const R  = this.layout.arenaRadius;
+        const left = this._finalists.length;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = "rgba(0,0,0,0.85)";
+        ctx.shadowBlur = 14;
+
+        // Soft pad so text reads over busy flags
+        ctx.globalAlpha = alpha * 0.35;
+        ctx.fillStyle = "#050816";
+        ctx.beginPath();
+        ctx.arc(cx, cy, R * 0.36, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = alpha;
+
+        const titleSize = Math.min(R * 0.11, 24);
+        ctx.font = `900 ${titleSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#F4F7FF";
+        ctx.fillText("LAST FLAG STANDING", cx, cy - titleSize * 0.35);
+
+        const subSize = Math.min(R * 0.075, 16);
+        ctx.font = `700 ${subSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#FFC83D";
+        ctx.shadowBlur = 8;
+        ctx.fillText(
+            `${left} FLAG${left === 1 ? "" : "S"} LEFT`,
+            cx,
+            cy + titleSize * 0.85
+        );
 
         ctx.restore();
     }
@@ -965,36 +1498,36 @@ export default class Game {
         ctx.scale(scale, scale);
         ctx.translate(-cx, -cy);
 
-        ctx.shadowColor = "rgba(210,35,35,0.70)";
-        ctx.shadowBlur  = 32;
-        ctx.fillStyle   = "rgba(14,3,3,0.98)";
+        ctx.shadowColor = "rgba(255, 83, 104, 0.45)";
+        ctx.shadowBlur  = 20;
+        ctx.fillStyle   = "#101D38";
         ctx.beginPath();
-        if (typeof ctx.roundRect === "function") ctx.roundRect(cardX, cardY, cardW, cardH, 16);
+        if (typeof ctx.roundRect === "function") ctx.roundRect(cardX, cardY, cardW, cardH, 12);
         else ctx.rect(cardX, cardY, cardW, cardH);
         ctx.fill();
-        ctx.strokeStyle = "rgba(220,40,40,0.92)";
-        ctx.lineWidth   = 2.5;
+        ctx.strokeStyle = "#FF5368";
+        ctx.lineWidth   = 2;
         ctx.stroke();
         ctx.shadowBlur  = 0;
 
         const bannerH = Math.round(cardH * 0.32);
         const grad    = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY);
-        grad.addColorStop(0,   "rgba(155,18,18,0.97)");
-        grad.addColorStop(0.5, "rgba(215,38,38,0.97)");
-        grad.addColorStop(1,   "rgba(155,18,18,0.97)");
+        grad.addColorStop(0,   "rgba(255, 83, 104, 0.85)");
+        grad.addColorStop(0.5, "rgba(255, 83, 104, 0.95)");
+        grad.addColorStop(1,   "rgba(255, 83, 104, 0.85)");
         ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.rect(cardX + 2.5, cardY + 2.5, cardW - 5, bannerH - 2.5);
+        ctx.rect(cardX + 2, cardY + 2, cardW - 4, bannerH - 2);
         ctx.fill();
 
         const elimSize = Math.min(cardW * 0.082, 20);
         ctx.font = `900 ${elimSize}px system-ui, Arial, sans-serif`;
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
-        ctx.fillStyle    = "#FFFFFF";
-        ctx.shadowColor  = "rgba(0,0,0,0.95)";
-        ctx.shadowBlur   = 7;
-        ctx.fillText("💀  ELIMINATED  💀", cx, cardY + bannerH / 2);
+        ctx.fillStyle    = "#F4F7FF";
+        ctx.shadowColor  = "rgba(0,0,0,0.90)";
+        ctx.shadowBlur   = 6;
+        ctx.fillText("ELIMINATED", cx, cardY + bannerH / 2);
         ctx.shadowBlur = 0;
 
         const bodyTop = cardY + bannerH + 8;
@@ -1046,92 +1579,175 @@ export default class Game {
     }
 
     _drawGrandChampionScreen(ctx) {
-        const cw = this._lw, ch = this._lh, cx = cw / 2;
-        const t     = (Date.now() - this._champDisplayStart) / 1000;
+        const cw = this._lw, ch = this._lh;
+        // Center everything inside the arena circle (reference stream layout)
+        const ax = this.layout?.arenaX ?? cw / 2;
+        const ay = this.layout?.arenaY ?? ch * 0.42;
+        const R  = this.layout?.arenaRadius ?? Math.min(cw, ch) * 0.38;
+        const t  = (Date.now() - this._champDisplayStart) / 1000;
         const pulse = 0.5 + 0.5 * Math.sin(t * 1.1);
+        const name = (this._grandChampion?.name ?? "").toUpperCase();
 
-        const bgGrad = ctx.createRadialGradient(cx, ch * 0.42, 0, cx, ch * 0.42, Math.max(cw, ch));
-        bgGrad.addColorStop(0, "rgba(10,6,0,1)");
-        bgGrad.addColorStop(0.5, "rgba(6,4,0,1)");
-        bgGrad.addColorStop(1, "rgba(2,2,2,1)");
+        // Midnight navy full background
+        ctx.fillStyle = "#050816";
+        ctx.fillRect(0, 0, cw, ch);
+
+        // Soft radial glow behind the arena
+        const bgGrad = ctx.createRadialGradient(ax, ay, R * 0.15, ax, ay, R * 1.35);
+        bgGrad.addColorStop(0, "rgba(32, 59, 104, 0.55)");
+        bgGrad.addColorStop(0.55, "rgba(10, 18, 38, 0.9)");
+        bgGrad.addColorStop(1, "rgba(5, 8, 22, 1)");
         ctx.fillStyle = bgGrad;
         ctx.fillRect(0, 0, cw, ch);
 
+        // Arena ring
         ctx.save();
-        ctx.translate(cx, ch * 0.38);
-        ctx.rotate(t * 0.04);
-        const rayR = Math.min(cw, ch) * 0.55;
-        for (let i = 0; i < 14; i++) {
-            const angle    = (i / 14) * Math.PI * 2;
-            const hw       = i % 2 === 0 ? Math.PI / 14 * 0.7 : Math.PI / 14 * 0.3;
-            const rayAlpha = (i % 2 === 0 ? 0.18 : 0.10) + pulse * 0.06;
+        ctx.beginPath();
+        ctx.arc(ax, ay, R, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(244, 247, 255, 0.85)";
+        ctx.lineWidth = 3;
+        ctx.shadowColor = "rgba(61, 124, 255, 0.45)";
+        ctx.shadowBlur = 18;
+        ctx.stroke();
+        ctx.restore();
+
+        // Gold rays inside the circle (reference: TIME UP — CHAMPION screen)
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(ax, ay, R * 0.98, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.translate(ax, ay);
+        ctx.rotate(t * 0.06);
+        const rayR = R * 0.98;
+        for (let i = 0; i < 18; i++) {
+            const angle = (i / 18) * Math.PI * 2;
+            const hw = i % 2 === 0 ? Math.PI / 18 * 0.85 : Math.PI / 18 * 0.35;
+            const rayAlpha = (i % 2 === 0 ? 0.22 : 0.10) + pulse * 0.06;
             ctx.beginPath();
-            ctx.moveTo(Math.cos(angle - hw) * 30, Math.sin(angle - hw) * 30);
-            ctx.lineTo(Math.cos(angle) * rayR,    Math.sin(angle) * rayR);
-            ctx.lineTo(Math.cos(angle + hw) * 30, Math.sin(angle + hw) * 30);
+            ctx.moveTo(Math.cos(angle - hw) * R * 0.08, Math.sin(angle - hw) * R * 0.08);
+            ctx.lineTo(Math.cos(angle) * rayR, Math.sin(angle) * rayR);
+            ctx.lineTo(Math.cos(angle + hw) * R * 0.08, Math.sin(angle + hw) * R * 0.08);
             ctx.closePath();
-            ctx.fillStyle = `rgba(255,200,0,${rayAlpha})`;
+            ctx.fillStyle = `rgba(255, 200, 61, ${rayAlpha})`;
             ctx.fill();
         }
         ctx.restore();
 
+        // TOP 1 badge above the ring
         ctx.save();
-        ctx.textAlign    = "center";
-        ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.shadowColor = "rgba(0,0,0,0.85)";
+        ctx.shadowBlur = 10;
+        const topSize = Math.min(R * 0.085, 17);
+        ctx.font = `800 ${topSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#FFC83D";
+        ctx.fillText(`TOP 1  ·  ${name || "CHAMPION"}`, ax, ay - R - topSize * 2.2);
 
-        const badgeSize = Math.min(cw * 0.042, 22);
-        ctx.font = `700 ${badgeSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle   = "rgba(255,215,0,0.75)";
-        ctx.shadowColor = "rgba(0,0,0,0.9)";
-        ctx.shadowBlur  = 10;
-        ctx.fillText("⏱  TIME'S UP  ·  GRAND FINAL OVER", cx, ch * 0.10);
+        // Vertical stack INSIDE the circle (reference stream):
+        //   🏆
+        //   TIME UP — CHAMPION
+        //   [ FLAG ]
+        //   COUNTRY
+        //   1 WIN
+        //   NEXT TOURNAMENT IN MM:SS
+        const trophySize = Math.min(R * 0.15, 34);
+        const titleSize  = Math.min(R * 0.09, 18);
+        const flagH      = Math.min(R * 0.32, 90);
+        const flagW      = Math.round(flagH * 1.55);
+        const nameSize   = Math.min(R * 0.11, 24);
+        const winSize    = Math.min(R * 0.075, 15);
+        const cdSize     = Math.min(R * 0.06, 12);
+        const gap        = Math.max(8, R * 0.03);
 
-        const champSize = Math.min(cw * 0.13, 80);
-        ctx.font = `900 ${champSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle   = "#FFD700";
-        ctx.shadowColor = "rgba(255,190,0,0.80)";
-        ctx.shadowBlur  = 36 + pulse * 20;
-        ctx.fillText("🏆  CHAMPION  🏆", cx, ch * 0.20);
+        const stackH =
+            trophySize + gap * 0.5 +
+            titleSize + gap +
+            flagH + gap +
+            nameSize + gap * 0.75 +
+            winSize + gap * 0.9 +
+            cdSize;
 
-        const img   = this._grandChampion?.image;
-        const flagW = Math.min(cw * 0.44, 300);
-        const flagH = flagW * 0.65;
-        const flagX = cx - flagW / 2;
-        const flagY = ch * 0.27;
+        let y = ay - stackH / 2;
+
+        // Trophy emoji
+        ctx.font = `900 ${trophySize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#FFC83D";
+        ctx.shadowColor = "rgba(255, 200, 61, 0.55)";
+        ctx.shadowBlur = 16 + pulse * 8;
+        ctx.fillText("🏆", ax, y);
+        y += trophySize + gap * 0.5;
+
+        // TIME UP — CHAMPION
+        ctx.font = `900 ${titleSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#FFC83D";
+        ctx.shadowBlur = 12;
+        ctx.fillText("TIME UP  —  CHAMPION", ax, y);
+        y += titleSize + gap;
+
+        // Flag card
+        const flagX = ax - flagW / 2;
+        const flagY = y;
+        const pad = Math.max(4, flagW * 0.04);
+        ctx.shadowColor = "rgba(0,0,0,0.55)";
+        ctx.shadowBlur = 14;
+        ctx.fillStyle = "#101D38";
+        ctx.beginPath();
+        if (typeof ctx.roundRect === "function") {
+            ctx.roundRect(flagX - pad, flagY - pad, flagW + pad * 2, flagH + pad * 2, 8);
+        } else {
+            ctx.rect(flagX - pad, flagY - pad, flagW + pad * 2, flagH + pad * 2);
+        }
+        ctx.fill();
+        ctx.strokeStyle = `rgba(255, 200, 61, ${0.55 + pulse * 0.25})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        const img = this._grandChampion?.image;
         if (img && img.complete && img.naturalWidth > 0) {
             ctx.save();
-            ctx.shadowColor = "rgba(255,215,0,0.80)";
-            ctx.shadowBlur  = 40 + pulse * 20;
+            ctx.shadowBlur = 0;
+            ctx.beginPath();
+            if (typeof ctx.roundRect === "function") {
+                ctx.roundRect(flagX, flagY, flagW, flagH, 4);
+            } else {
+                ctx.rect(flagX, flagY, flagW, flagH);
+            }
+            ctx.clip();
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = "high";
             ctx.drawImage(img, flagX, flagY, flagW, flagH);
             ctx.restore();
-            ctx.strokeStyle = `rgba(255,215,0,${0.6 + pulse * 0.3})`;
-            ctx.lineWidth   = 3;
-            ctx.strokeRect(flagX, flagY, flagW, flagH);
         }
+        y += flagH + gap;
 
-        const nameSize = Math.min(cw * 0.085, 54);
-        ctx.font = `900 ${nameSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle   = "#FFFFFF";
-        ctx.shadowColor = "rgba(0,0,0,0.95)";
-        ctx.shadowBlur  = 18;
-        ctx.fillText(this._grandChampion?.name ?? "", cx, flagY + flagH + nameSize * 0.9);
+        // Country name — clearly below the flag
+        ctx.font = `800 ${nameSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#F4F7FF";
+        ctx.shadowColor = "rgba(0,0,0,0.9)";
+        ctx.shadowBlur = 12;
+        let displayName = name;
+        while (displayName.length > 2 && ctx.measureText(displayName).width > R * 1.5) {
+            displayName = displayName.slice(0, -1);
+        }
+        ctx.fillText(displayName, ax, y);
+        y += nameSize + gap * 0.75;
 
-        const congrSize = Math.min(cw * 0.042, 24);
-        ctx.font = `700 ${congrSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = "rgba(255,215,0,0.85)";
-        ctx.shadowBlur = 14;
-        ctx.fillText("🎊  CONGRATULATIONS  🎊", cx, flagY + flagH + nameSize * 2.1);
+        // 1 WIN
+        ctx.font = `800 ${winSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#FFC83D";
+        ctx.shadowBlur = 10;
+        ctx.fillText("1 WIN", ax, y);
+        y += winSize + gap * 0.9;
 
+        // NEXT TOURNAMENT IN MM:SS
         const mins  = Math.floor(this._champCountdownRemain / 60);
         const secs  = this._champCountdownRemain % 60;
-        const cdStr = `${mins}:${String(secs).padStart(2, "0")}`;
-        const cdSize = Math.min(cw * 0.035, 19);
-        ctx.font = `600 ${cdSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle = "rgba(180,210,255,0.70)";
-        ctx.shadowBlur = 8;
-        ctx.fillText(`Next round starting in  ${cdStr}`, cx, ch * 0.88);
+        const cdStr = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+        ctx.font = `700 ${cdSize}px system-ui, Arial, sans-serif`;
+        ctx.fillStyle = "#91A7C9";
+        ctx.shadowBlur = 6;
+        ctx.fillText(`NEXT TOURNAMENT IN  ${cdStr}`, ax, y);
 
         ctx.restore();
     }

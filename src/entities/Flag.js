@@ -13,9 +13,9 @@ export default class Flag {
             this.width, this.height,
             {
                 label       : "flag",
-                restitution : 0.88,
-                friction    : 0.01,
-                frictionAir : 0.006,
+                restitution : 0.95,
+                friction    : 0.005,
+                frictionAir : 0.003,
                 density     : 0.0012,
                 chamfer     : { radius: Math.max(1, width * 0.06) },
                 sleepThreshold: 80,

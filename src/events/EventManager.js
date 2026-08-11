@@ -7,11 +7,13 @@ import DoubleHoleEvent     from "./events/DoubleHoleEvent.js";
 import MagnetCoreEvent     from "./events/MagnetCoreEvent.js";
 import WindGustEvent       from "./events/WindGustEvent.js";
 import BouncyEvent         from "./events/BouncyEvent.js";
+import LastStandingEvent   from "./events/LastStandingEvent.js";
 
+// Qualifying pool only — LAST STANDING is final-exclusive (not in rotation)
 const ALL_EVENTS = [
-     ClassicEvent,
-  TurboEvent,
-     LowGravityEvent,
+    ClassicEvent,
+    TurboEvent,
+    LowGravityEvent,
     EarthquakeEvent,
 // ShrinkingArenaEvent,
     DoubleHoleEvent,
@@ -35,6 +37,23 @@ export default class EventManager {
 
         this._lastIndex = idx;
         this.current    = new ALL_EVENTS[idx]();
+        return this.current;
+    }
+
+    /** Force CLASSIC — available if needed. */
+    pickClassic() {
+        this.current = new ClassicEvent();
+        this._lastIndex = 0;
+        return this.current;
+    }
+
+    /**
+     * Final-only: continuous LAST STANDING physics
+     * (video-style swirl + steady gap + strong funnel).
+     */
+    pickLastStanding() {
+        this.current = new LastStandingEvent();
+        this._lastIndex = -1;
         return this.current;
     }
 

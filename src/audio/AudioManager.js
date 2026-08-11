@@ -233,6 +233,32 @@ export default class AudioManager {
         this._noise(chordStart, 0.60, 0.12, 8000);
     }
 
+    /** Soft crowd clap burst for champion celebration. */
+    playClap() {
+        const ctx = this._resume();
+        if (!ctx) return;
+        const t = ctx.currentTime;
+        // Layered short noise bursts = applause texture
+        for (let i = 0; i < 6; i++) {
+            const st = t + i * 0.045 + Math.random() * 0.02;
+            this._noise(st, 0.06 + Math.random() * 0.04, 0.14 + Math.random() * 0.08, 1800 + Math.random() * 1200);
+            this._tone(180 + Math.random() * 80, st, 0.04, 0.06, 'triangle', 0.03);
+        }
+        this._noise(t, 0.35, 0.10, 900);
+    }
+
+    /** Light confetti / sparkle whoosh for champion screen. */
+    playConfetti() {
+        const ctx = this._resume();
+        if (!ctx) return;
+        const t = ctx.currentTime;
+        this._noise(t, 0.18, 0.18, 6000);
+        this._noise(t + 0.05, 0.22, 0.10, 4000);
+        this._tone(1200, t, 0.08, 0.08, 'sine', 0.06);
+        this._tone(1800, t + 0.04, 0.10, 0.06, 'sine', 0.07);
+        this._tone(2400, t + 0.08, 0.12, 0.05, 'triangle', 0.08);
+    }
+
     playMilestone(remaining, total) {
         const pct = remaining / total;
         let key = null;

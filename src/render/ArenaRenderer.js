@@ -1,4 +1,4 @@
-// ArenaRenderer.js — ring + soft outer glow
+// ArenaRenderer.js — white main ring + subtle electric-blue glow (premium broadcast)
 
 export default class ArenaRenderer {
 
@@ -14,29 +14,34 @@ export default class ArenaRenderer {
 
         const gapAngle = (arena.gapSize / arena.segmentCount) * Math.PI * 2;
 
-        // Soft outer glow (drawn first, under the ring)
+        // Soft outer electric-blue glow (under the ring — kept subtle)
         ctx.save();
-        ctx.shadowColor = "rgba(120, 180, 255, 0.55)";
-        ctx.shadowBlur  = 18;
-        ctx.strokeStyle = "rgba(180, 210, 255, 0.35)";
-        ctx.lineWidth   = 8;
+        ctx.shadowColor = "rgba(61, 124, 255, 0.40)";
+        ctx.shadowBlur  = 14;
+        ctx.strokeStyle = "rgba(56, 213, 255, 0.22)";
+        ctx.lineWidth   = 7;
         ctx.lineCap     = "round";
         this._strokeRing(ctx, arena, gapAngle);
         ctx.restore();
 
         // Main white ring
-        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
         ctx.lineWidth   = 3;
         ctx.lineCap     = "round";
-        ctx.shadowColor = "rgba(255,255,255,0.40)";
-        ctx.shadowBlur  = 8;
+        ctx.shadowColor = "rgba(61, 124, 255, 0.28)";
+        ctx.shadowBlur  = 6;
         this._strokeRing(ctx, arena, gapAngle);
 
-        // Inner thin highlight
+        // Subtle blue inner ring
         ctx.shadowBlur  = 0;
-        ctx.strokeStyle = "rgba(200, 230, 255, 0.25)";
-        ctx.lineWidth   = 1.5;
-        this._strokeRing(ctx, arena, gapAngle, -1.5);
+        ctx.strokeStyle = "rgba(61, 124, 255, 0.22)";
+        ctx.lineWidth   = 1.4;
+        this._strokeRing(ctx, arena, gapAngle, -2.2);
+
+        // Very thin outer cyan hint
+        ctx.strokeStyle = "rgba(56, 213, 255, 0.14)";
+        ctx.lineWidth   = 1;
+        this._strokeRing(ctx, arena, gapAngle, 2.5);
 
         ctx.restore();
     }

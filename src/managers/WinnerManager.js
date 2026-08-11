@@ -24,6 +24,13 @@ export default class WinnerManager {
         // Persistent win records: { [code]: { name, imageSrc, wins } }
         this._wins       = this._loadWins();
         this._imageCache = {};
+
+        // Stalemate: few flags barely moving for a short period → force tie
+        // so a mutual jam never freezes the round indefinitely.
+        this._stalemateSince    = 0;
+        this._STALEMATE_MS      = 2500;  // 2.5s of stillness
+        this._STALEMATE_MAX_SPD = 0.55;  // all remaining flags slower than this
+        this._STALEMATE_MAX_N   = 8;     // only when few flags left
     }
 
     // ── Persistence ───────────────────────────────────────────────────────────
@@ -87,11 +94,13 @@ export default class WinnerManager {
         const remaining = flagManager.flags;
 
         if (remaining.length === 1) {
+            this._stalemateSince = 0;
             this._recordWin(remaining[0]);
             return;
         }
 
         if (remaining.length === 0) {
+            this._stalemateSince = 0;
             const eliminated = eliminationManager?.eliminated ?? [];
             const batchSize  = eliminationManager?._lastBatchSize ?? 0;
             const tiedFlags  = batchSize >= 2
@@ -106,6 +115,34 @@ export default class WinnerManager {
                 this.winner = { isTie: true, countries: [], isSilent: true };
                 if (this.onWin) this.onWin(this.winner);
             }
+            return;
+        }
+
+        // ── Stalemate timeout (2–3 flags jammed, never exiting) ────────────
+        // When only a handful remain and every body is nearly still for
+        // STALEMATE_MS, declare a tie so the event can advance.
+        if (remaining.length >= 2 && remaining.length <= this._STALEMATE_MAX_N) {
+            let maxSpd = 0;
+            for (let i = 0; i < remaining.length; i++) {
+                const v = remaining[i].body?.velocity;
+                if (!v) continue;
+                const s = Math.hypot(v.x, v.y);
+                if (s > maxSpd) maxSpd = s;
+            }
+
+            if (maxSpd < this._STALEMATE_MAX_SPD) {
+                const now = performance.now();
+                if (!this._stalemateSince) {
+                    this._stalemateSince = now;
+                } else if (now - this._stalemateSince >= this._STALEMATE_MS) {
+                    this._stalemateSince = 0;
+                    this._recordTie(remaining.slice());
+                }
+            } else {
+                this._stalemateSince = 0;
+            }
+        } else {
+            this._stalemateSince = 0;
         }
     }
 
@@ -140,5 +177,6 @@ export default class WinnerManager {
 
     reset() {
         this.winner = null;
+        this._stalemateSince = 0;
     }
 }

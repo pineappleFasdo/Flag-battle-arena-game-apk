@@ -18,9 +18,9 @@ const SELECTION_EVENTS = [
         icon        : '🌍',
         title       : '40 Min Qualifier',
         subtitle    : '249 flags · rounds run until time is up · top winners advance to the Final',
-        color       : '#FFD700',
-        borderColor : 'rgba(255,215,0,0.55)',
-        glowColor   : 'rgba(255,180,0,0.25)',
+        color       : '#3D7CFF',
+        borderColor : 'rgba(46, 98, 232, 0.70)',
+        glowColor   : 'rgba(61, 124, 255, 0.25)',
         badge       : 'CLASSIC',
     },
     // Future events go here, e.g.:
@@ -132,12 +132,65 @@ canvas.addEventListener('click', function () {
     }
 });
 
+// ── DEBUG: Keyboard shortcuts ─────────────────────────────────────────────────
+// Shift+P  →  Drain the qualify pool down to 1 country remaining (leaving only
+//             1 in _qualifyPool, rest in _qualifyWinners).  On the NEXT round,
+//             _pickQualifyBatch() will see pool.length < 2, trigger the refill,
+//             and start a new round with all 249 flags again.  This lets you
+//             test the pool-exhaustion edge case in seconds instead of 40 mins.
+//
+// Shift+F  →  Skip the qualifier timer so Final Mode triggers on next winner.
+//
+// DELETE before public release.
+document.addEventListener('keydown', function (e) {
+    if (!e.shiftKey) return;
+
+    // Shift+P — simulate pool near-exhaustion (1 country left in pool)
+    if (e.key === 'P' || e.key === 'p') {
+        if (game.isFinalMode) {
+            console.warn('[DEBUG] Shift+P ignored — already in Final Mode.');
+            return;
+        }
+
+        const pool    = game._qualifyPool;
+        const winners = game._qualifyWinners;
+
+        if (pool.length === 0) {
+            console.warn('[DEBUG] Shift+P — pool is already empty.');
+            return;
+        }
+
+        // Move all but 1 country from pool → winners, simulating 248 prior wins
+        const keep = pool.splice(pool.length - 1, 1);   // keep last entry in pool
+        const moved = pool.splice(0, pool.length);       // drain the rest
+        moved.forEach(function (c) { winners.push(c); });
+        pool.push(keep[0]);   // restore the single survivor
+
+        console.log(
+            '[DEBUG] Shift+P — pool drained to 1.',
+            '_qualifyPool:', game._qualifyPool.map(function(c){ return c.name; }),
+            '| _qualifyWinners count:', game._qualifyWinners.length,
+            '\nNext call to _pickQualifyBatch() will refill and restart with all', game.allCountries.length, 'countries.'
+        );
+    }
+
+    // Shift+F — skip qualifier timer (Final Mode on next winner)
+    if (e.key === 'F' || e.key === 'f') {
+        if (game.gameState !== 'PLAYING' && game.gameState !== 'COUNTDOWN') {
+            console.warn('[DEBUG] Shift+F ignored — game is not running.');
+            return;
+        }
+        game.sessionStartTime = Date.now() - game.QUALIFY_DURATION_MS - 1;
+        console.log('[DEBUG] Shift+F — Final Mode will trigger on next winner.');
+    }
+});
+
 // ── Capacitor plugins ────────────────────────────────────────────────────────
 function initCapacitor() {
     import('@capacitor/status-bar').then(function (m) {
         m.StatusBar.setOverlaysWebView({ overlay: true });
         m.StatusBar.setStyle({ style: m.Style.Dark });
-        m.StatusBar.setBackgroundColor({ color: '#0a0b10' });
+        m.StatusBar.setBackgroundColor({ color: '#050816' });
     }).catch(function () {});
     import('@capacitor/splash-screen').then(function (m) {
         m.SplashScreen.hide({ fadeOutDuration: 400 });
