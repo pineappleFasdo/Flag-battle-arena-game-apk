@@ -59,6 +59,13 @@ export default class EventManager {
         return this.current;
     }
 
+    /** Force EARTHQUAKE — used for sudden-death rounds. */
+    pickEarthquake() {
+        this.current = new EarthquakeEvent();
+        this._lastIndex = ALL_EVENTS.indexOf(EarthquakeEvent);
+        return this.current;
+    }
+
     /**
      * Final-only: continuous LAST STANDING physics
      * (video-style swirl + steady gap + strong funnel).

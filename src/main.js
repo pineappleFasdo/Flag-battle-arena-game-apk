@@ -231,6 +231,10 @@ canvas.addEventListener('click', function () {
 //
 // Shift+F  →  Skip the qualifier timer so Final Mode triggers on next winner.
 //
+// Shift+Y  →  Force Highest Wins sudden-death tiebreaker.
+//             Sets 3 countries to the same top win count, ends the 40-min clock,
+//             and immediately enters the sudden death round.
+//
 // DELETE before public release.
 document.addEventListener('keydown', function (e) {
     if (!e.shiftKey) return;
@@ -308,6 +312,58 @@ document.addEventListener('keydown', function (e) {
             game.sessionMode.sessionStartTime = Date.now() - HighestWinsMode.DURATION_MS - 1000;
             console.log('[DEBUG] Shift+H — Highest Wins time forced to end, champion on next win.');
         }
+    }
+
+    // Shift+Y — force Highest Wins sudden-death tiebreaker
+    if (e.key === 'Y' || e.key === 'y') {
+        if (!game.isHighestWinsMode) {
+            console.warn('[DEBUG] Shift+Y only works in Highest Winner Wins mode.');
+            return;
+        }
+
+        // Pick 3 countries to force into a tie at the top of the leaderboard
+        const pool = game.allCountries?.length
+            ? game.allCountries
+            : (game.activeCountries || []);
+        if (pool.length < 2) {
+            console.warn('[DEBUG] Shift+Y — not enough countries available.');
+            return;
+        }
+
+        const tieCount = Math.min(6, pool.length);
+        const tied = pool.slice(0, tieCount);
+        const SHARED_WINS = 5;
+
+        // Clear existing wins then give the chosen countries the same high score
+        game.winnerManager.clearWins();
+        tied.forEach(function (c) {
+            game.winnerManager._wins[c.code] = {
+                name    : c.name,
+                imageSrc: c.image?.src ?? null,
+                wins    : SHARED_WINS,
+            };
+            if (c.image) game.winnerManager._imageCache[c.code] = c.image;
+        });
+        game.winnerManager._saveWins();
+
+        // Force the 40-minute clock to be expired
+        if (game.sessionMode) {
+            game.sessionMode.sessionStartTime = Date.now() - HighestWinsMode.DURATION_MS - 1000;
+            game.sessionMode.ended = false; // allow _declareChampion to run
+        }
+
+        console.log(
+            '[DEBUG] Shift+Y — Forced tie between:',
+            tied.map(function (c) { return c.name; }).join(', '),
+            '(' + SHARED_WINS + ' wins each). Entering sudden death…'
+        );
+
+        // Declare champion first (this populates mode.tiedCountries when there is a tie)
+        // then run the end-of-session logic which will detect the tie and start sudden death.
+        if (game.sessionMode) {
+            game.sessionMode._declareChampion();
+        }
+        game._endHighestWinsSession();
     }
 });
 

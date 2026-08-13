@@ -493,8 +493,10 @@ export default class Game {
             this.layout.arenaX, this.layout.arenaY, spawnRadius, this.totalCountries
         );
         this._nextSpawnPositions = positions;
+        // Few countries → large spacing → oversized flags that can't exit the gap.
+        // Cap at the same max used in Final Mode so size matches normal events.
         const rawW = Math.max(10, spacing * 1.05);
-        this._nextFlagW = Math.min(rawW, 32);
+        this._nextFlagW = Math.min(rawW, 22);
         this._nextFlagH = Math.max(7, Math.round(this._nextFlagW * 0.667));
 
         this._clearAllFlags();
@@ -527,7 +529,8 @@ export default class Game {
             this._finalElimFreezeUntil = 0;
             this._finalElimPhase = null;
             if (this.theme?.stars) this.spaceTheme.notifyNotPlaying();
-            this.eventManager.pick();
+            // Always run Earthquake in sudden death for consistent, active physics
+            this.eventManager.pickEarthquake();
             this.nextEventDuration = 130;
         }, this._suddenDeathBannerDuration);
     }
