@@ -21,9 +21,9 @@ export default class ArenaPhysics {
         this.segmentCount = 48;
         this.thickness    = 22;
 
-        // Gap size tuned for 30-40 sec rounds (3 segments = moderate drain)
+        // Gap starts moderate; progressive widen (setRemainingFlags) opens up to maxGap
         this.initialGapSize = 3;
-        this.maxGapSize     = 3;
+        this.maxGapSize     = 7;
         this.gapSize        = 0;
 
         this.state           = STATE_INTRO;
@@ -76,10 +76,18 @@ export default class ArenaPhysics {
 
     setRemainingFlags(count) {
         this.remainingFlags = count;
-        // Gap size stays FIXED for the whole tournament (qualifying + final).
-        // No progressive widen — round 1 and round 32 use the same small gap.
-        if (this.state === STATE_PLAYING && this.gapSize !== this.initialGapSize) {
-            this.gapSize = this.initialGapSize;
+        // Progressive widen: as flags leave, open the disc more so remaining
+        // flags (and larger elim-round flags) can still exit cleanly.
+        // ratio 1 → initialGap, ratio 0 → maxGap.
+        if (this.state === STATE_PLAYING) {
+            const total = Math.max(1, this.totalFlags);
+            const ratio = Math.max(0, Math.min(1, count / total));
+            // Ease so early eliminations only open a little; late game opens more.
+            const t = 1 - ratio;
+            const eased = t * t; // ease-in
+            const minG = this.initialGapSize;
+            const maxG = Math.max(minG, this.maxGapSize);
+            this.gapSize = Math.max(minG, Math.round(minG + (maxG - minG) * eased));
         }
     }
 

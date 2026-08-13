@@ -41,6 +41,8 @@ export default class SpaceTheme {
     constructor() {
         this._stars     = [];
         this._nebula    = [];
+        this._planets   = [];
+        this._shooters  = [];   // occasional distant shooting stars
         this._asteroids = [];
         this._impacts   = [];
         this._frame     = 0;
@@ -144,46 +146,115 @@ export default class SpaceTheme {
         this._lw = lw; this._lh = lh; this._built = true;
         this._buildStars(lw, lh);
         this._buildNebula(lw, lh);
+        this._buildPlanets(lw, lh);
+        this._shooters = [];
     }
 
     _buildStars(lw, lh) {
         this._stars = [];
-        const count = Math.round((lw * lh) / 4200);
-        for (let i = 0; i < count; i++) {
-            const sz = Math.random();
-            this._stars.push({
-                x: Math.random()*lw, y: Math.random()*lh,
-                r: 0.4+sz*1.1, base: 0.18+sz*0.55, alpha: 0,
-                phase: Math.random()*Math.PI*2,
-                speed: 0.012+Math.random()*0.022,
-                color: this._starColor(),
-            });
+        // Three parallax layers — denser, but still soft background
+        const layers = [
+            { density: 2800, rMin: 0.35, rMax: 0.9,  aMin: 0.12, aMax: 0.35, drift: 0.015 }, // far
+            { density: 3800, rMin: 0.5,  rMax: 1.3,  aMin: 0.18, aMax: 0.50, drift: 0.035 }, // mid
+            { density: 5200, rMin: 0.7,  rMax: 1.8,  aMin: 0.22, aMax: 0.65, drift: 0.06  }, // near
+        ];
+        for (const layer of layers) {
+            const count = Math.round((lw * lh) / layer.density);
+            for (let i = 0; i < count; i++) {
+                const t = Math.random();
+                const r = layer.rMin + t * (layer.rMax - layer.rMin);
+                const base = layer.aMin + t * (layer.aMax - layer.aMin);
+                this._stars.push({
+                    x: Math.random() * lw,
+                    y: Math.random() * lh,
+                    r,
+                    base,
+                    alpha: base,
+                    phase: Math.random() * Math.PI * 2,
+                    speed: 0.008 + Math.random() * 0.018,
+                    color: this._starColor(),
+                    driftX: (Math.random() - 0.5) * layer.drift,
+                    driftY: (Math.random() - 0.5) * layer.drift * 0.6,
+                });
+            }
         }
-        for (const s of this._stars)
-            s.alpha = s.base + Math.sin(s.phase)*s.base*0.45;
     }
 
     _starColor() {
         const r = Math.random();
-        if (r < 0.55) return '#FFFFFF';
-        if (r < 0.72) return '#B8D4FF';
-        if (r < 0.84) return '#FFE8C0';
-        if (r < 0.92) return '#C8B0FF';
-        return '#80CFFF';
+        if (r < 0.50) return '#FFFFFF';
+        if (r < 0.68) return '#C8DCFF';
+        if (r < 0.80) return '#FFE9C8';
+        if (r < 0.90) return '#D0B8FF';
+        return '#90D8FF';
     }
 
     _buildNebula(lw, lh) {
         this._nebula = [];
-        const palette = [[100,60,200],[40,100,200],[160,40,180],[20,80,160]];
-        const count   = 3 + Math.floor(Math.random()*2);
+        // Soft galactic dust — very low alpha so it never competes with the arena
+        const palette = [
+            [70,  40, 160],
+            [30,  70, 150],
+            [120, 30, 140],
+            [20,  90, 130],
+            [90,  50, 110],
+        ];
+        const count = 4 + Math.floor(Math.random() * 3);
         for (let i = 0; i < count; i++) {
-            const [r,g,b] = palette[i%palette.length];
+            const [r, g, b] = palette[i % palette.length];
             this._nebula.push({
-                x: 0.15*lw+Math.random()*0.70*lw,
-                y: 0.15*lh+Math.random()*0.70*lh,
-                rx: lw*(0.18+Math.random()*0.22),
-                ry: lh*(0.14+Math.random()*0.18),
-                r,g,b, a: 0.028+Math.random()*0.030,
+                x: 0.05 * lw + Math.random() * 0.90 * lw,
+                y: 0.05 * lh + Math.random() * 0.90 * lh,
+                rx: lw * (0.20 + Math.random() * 0.28),
+                ry: lh * (0.14 + Math.random() * 0.22),
+                r, g, b,
+                a: 0.018 + Math.random() * 0.022,
+                driftX: (Math.random() - 0.5) * 0.08,
+                driftY: (Math.random() - 0.5) * 0.05,
+            });
+        }
+    }
+
+    _buildPlanets(lw, lh) {
+        this._planets = [];
+        // Soft stylized orbs — match game neon/space look, never compete with arena
+        // 2–3 only, edge-biased, low alpha
+        const kinds = [
+            { name: 'warm',  glow: [160, 120, 255], body: [90, 70, 140],  accent: [200, 160, 255] }, // soft violet
+            { name: 'cool',  glow: [80, 180, 255],  body: [40, 90, 150],   accent: [140, 210, 255] }, // ice blue
+            { name: 'gold',  glow: [255, 190, 120], body: [140, 100, 50],  accent: [255, 220, 170] }, // distant sun-tint
+            { name: 'teal',  glow: [80, 220, 200],  body: [30, 110, 100],  accent: [140, 240, 220] },
+        ];
+        // Shuffle and take 2–3
+        for (let i = kinds.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [kinds[i], kinds[j]] = [kinds[j], kinds[i]];
+        }
+        const count = 2 + (Math.random() < 0.45 ? 1 : 0);
+        const picked = kinds.slice(0, count);
+
+        for (let i = 0; i < picked.length; i++) {
+            const k = picked[i];
+            const side = Math.floor(Math.random() * 4);
+            let x, y;
+            if (side === 0) { x = Math.random() * lw * 0.28; y = 0.1 * lh + Math.random() * lh * 0.8; }
+            else if (side === 1) { x = lw * 0.72 + Math.random() * lw * 0.28; y = 0.1 * lh + Math.random() * lh * 0.8; }
+            else if (side === 2) { x = Math.random() * lw; y = Math.random() * lh * 0.22; }
+            else { x = Math.random() * lw; y = lh * 0.78 + Math.random() * lh * 0.22; }
+
+            const minDim = Math.min(lw, lh);
+            this._planets.push({
+                x, y,
+                r: minDim * (0.028 + Math.random() * 0.022),
+                glow: k.glow,
+                body: k.body,
+                accent: k.accent,
+                alpha: 0.20 + Math.random() * 0.12,  // keep very soft
+                driftX: (Math.random() - 0.5) * 0.03,
+                driftY: (Math.random() - 0.5) * 0.02,
+                phase: Math.random() * Math.PI * 2,
+                hasRing: Math.random() < 0.4,
+                ringTilt: -0.5 + Math.random() * 0.3,
             });
         }
     }
@@ -255,10 +326,63 @@ export default class SpaceTheme {
         // Blocked states: event-start flash (COUNTDOWN), transition card (NEXT_EVENT), etc.
         const stateBlocked = BLOCKED_STATES.has(gameState);
 
-        // Twinkle stars always
-        for (const s of this._stars){
+        // ── Background motion (always, subtle) ───────────────────────────────────
+        // Stars: twinkle + slow drift with wrap
+        for (const s of this._stars) {
             s.phase += s.speed;
-            s.alpha  = s.base + Math.sin(s.phase)*s.base*0.45;
+            s.alpha  = s.base + Math.sin(s.phase) * s.base * 0.45;
+            s.x += s.driftX;
+            s.y += s.driftY;
+            if (s.x < -2) s.x = lw + 2;
+            else if (s.x > lw + 2) s.x = -2;
+            if (s.y < -2) s.y = lh + 2;
+            else if (s.y > lh + 2) s.y = -2;
+        }
+
+        // Nebula clouds drift very slowly
+        for (const n of this._nebula) {
+            n.x += n.driftX;
+            n.y += n.driftY;
+            if (n.x < -n.rx) n.x = lw + n.rx;
+            else if (n.x > lw + n.rx) n.x = -n.rx;
+            if (n.y < -n.ry) n.y = lh + n.ry;
+            else if (n.y > lh + n.ry) n.y = -n.ry;
+        }
+
+        // Planets drift extremely slowly + soft breathing alpha
+        for (const p of this._planets) {
+            p.x += p.driftX;
+            p.y += p.driftY;
+            p.phase += 0.004;
+            if (p.x < -p.r * 2) p.x = lw + p.r * 2;
+            else if (p.x > lw + p.r * 2) p.x = -p.r * 2;
+            if (p.y < -p.r * 2) p.y = lh + p.r * 2;
+            else if (p.y > lh + p.r * 2) p.y = -p.r * 2;
+        }
+
+        // Occasional distant shooting star
+        if (Math.random() < 0.008 && this._shooters.length < 2) {
+            const fromTop = Math.random() < 0.5;
+            this._shooters.push({
+                x: Math.random() * lw,
+                y: fromTop ? -10 : Math.random() * lh * 0.4,
+                vx: 3 + Math.random() * 5,
+                vy: 1.5 + Math.random() * 3,
+                life: 40 + Math.floor(Math.random() * 30),
+                maxLife: 50,
+                len: 18 + Math.random() * 28,
+            });
+            this._shooters[this._shooters.length - 1].maxLife =
+                this._shooters[this._shooters.length - 1].life;
+        }
+        for (let i = this._shooters.length - 1; i >= 0; i--) {
+            const s = this._shooters[i];
+            s.x += s.vx;
+            s.y += s.vy;
+            s.life--;
+            if (s.life <= 0 || s.x > lw + 40 || s.y > lh + 40) {
+                this._shooters.splice(i, 1);
+            }
         }
 
         // Warning countdown
@@ -442,11 +566,129 @@ export default class SpaceTheme {
     // ── Draw ──────────────────────────────────────────────────────────────────
     draw(ctx, lw, lh) {
         if (!this._built) return;
+        // Far background layers first — all stay soft so arena/flags dominate
+        this._drawSpaceGradient(ctx, lw, lh);
         this._drawNebula(ctx);
+        this._drawPlanets(ctx);
         this._drawStars(ctx);
+        this._drawShooters(ctx);
+        // Gameplay overlays (asteroids / impacts / burns)
         this._drawAsteroids(ctx);
         this._drawImpacts(ctx);
         this._drawBurnEffects(ctx);
+    }
+
+    _drawSpaceGradient(ctx, lw, lh) {
+        // Subtle radial vignette — deep space feel without washing the arena
+        const cx = lw * 0.5, cy = lh * 0.45;
+        const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(lw, lh) * 0.75);
+        grd.addColorStop(0,   'rgba(12, 8, 28, 0)');
+        grd.addColorStop(0.55,'rgba(6, 4, 18, 0.25)');
+        grd.addColorStop(1,   'rgba(2, 1, 10, 0.55)');
+        ctx.fillStyle = grd;
+        ctx.fillRect(0, 0, lw, lh);
+
+        // Faint galactic band (diagonal soft glow)
+        ctx.save();
+        ctx.translate(lw * 0.5, lh * 0.5);
+        ctx.rotate(-0.35);
+        const band = ctx.createLinearGradient(0, -lh * 0.08, 0, lh * 0.08);
+        band.addColorStop(0,   'rgba(80, 50, 140, 0)');
+        band.addColorStop(0.5, 'rgba(90, 60, 160, 0.045)');
+        band.addColorStop(1,   'rgba(80, 50, 140, 0)');
+        ctx.fillStyle = band;
+        ctx.fillRect(-lw, -lh * 0.12, lw * 2, lh * 0.24);
+        ctx.restore();
+    }
+
+    _drawPlanets(ctx) {
+        ctx.save();
+        for (const p of this._planets) {
+            const breath = 0.94 + 0.06 * Math.sin(p.phase);
+            const a = p.alpha * breath;
+            const [gr, gg, gb] = p.glow;
+            const [br, bg, bb] = p.body;
+            const [ar, ag, ab] = p.accent;
+
+            // Outer haze — very soft bloom
+            const haze = ctx.createRadialGradient(p.x, p.y, p.r * 0.2, p.x, p.y, p.r * 2.6);
+            haze.addColorStop(0,   `rgba(${gr},${gg},${gb},${a * 0.22})`);
+            haze.addColorStop(0.45,`rgba(${gr},${gg},${gb},${a * 0.08})`);
+            haze.addColorStop(1,   `rgba(${gr},${gg},${gb},0)`);
+            ctx.fillStyle = haze;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r * 2.6, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Ring behind body (if any)
+            if (p.hasRing) {
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.rotate(p.ringTilt);
+                ctx.beginPath();
+                ctx.ellipse(0, 0, p.r * 1.75, p.r * 0.32, 0, Math.PI, Math.PI * 2);
+                ctx.strokeStyle = `rgba(${ar},${ag},${ab},${a * 0.28})`;
+                ctx.lineWidth = Math.max(1, p.r * 0.1);
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            // Sphere — simple clean gradient (game-style, not photo-real)
+            const sphere = ctx.createRadialGradient(
+                p.x - p.r * 0.35, p.y - p.r * 0.35, p.r * 0.08,
+                p.x, p.y, p.r
+            );
+            sphere.addColorStop(0,   `rgba(${ar},${ag},${ab},${a * 0.95})`);
+            sphere.addColorStop(0.45,`rgba(${gr},${gg},${gb},${a * 0.75})`);
+            sphere.addColorStop(1,   `rgba(${br},${bg},${bb},${a * 0.85})`);
+            ctx.fillStyle = sphere;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Tiny specular highlight
+            ctx.fillStyle = `rgba(255,255,255,${a * 0.22})`;
+            ctx.beginPath();
+            ctx.arc(p.x - p.r * 0.28, p.y - p.r * 0.28, p.r * 0.18, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Ring in front
+            if (p.hasRing) {
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.rotate(p.ringTilt);
+                ctx.beginPath();
+                ctx.ellipse(0, 0, p.r * 1.75, p.r * 0.32, 0, 0, Math.PI);
+                ctx.strokeStyle = `rgba(${ar},${ag},${ab},${a * 0.32})`;
+                ctx.lineWidth = Math.max(1, p.r * 0.1);
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+        ctx.restore();
+    }
+
+    _drawShooters(ctx) {
+        if (!this._shooters.length) return;
+        ctx.save();
+        ctx.lineCap = 'round';
+        for (const s of this._shooters) {
+            const t = s.life / s.maxLife;
+            const ang = Math.atan2(s.vy, s.vx);
+            const tx = s.x - Math.cos(ang) * s.len;
+            const ty = s.y - Math.sin(ang) * s.len;
+            const grd = ctx.createLinearGradient(tx, ty, s.x, s.y);
+            grd.addColorStop(0, 'rgba(200,220,255,0)');
+            grd.addColorStop(0.6, `rgba(220,235,255,${0.25 * t})`);
+            grd.addColorStop(1, `rgba(255,255,255,${0.55 * t})`);
+            ctx.strokeStyle = grd;
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(tx, ty);
+            ctx.lineTo(s.x, s.y);
+            ctx.stroke();
+        }
+        ctx.restore();
     }
 
     // ── Warning banner — only during shower, only if PLAYING ─────────────────

@@ -37,30 +37,35 @@ export default class BottomTrayRenderer {
         ctx.lineTo(canvasWidth, trayTop);
         ctx.stroke();
 
-        // ── Asteroid shower message overlay ──────────────────────────────────
+        // ── Asteroid shower message (compact banner at top of tray) ──────────
+        // Does NOT replace the eliminated-flag grid — both stay visible.
         const msgActive = asteroidMessage &&
             asteroidMessage.countries?.length > 0 &&
             Date.now() - asteroidMessage.time < 5000;
 
+        let gridTop = trayTop;
+        let gridH   = trayHeight;
         if (msgActive) {
-            this._drawAsteroidMessage(ctx, asteroidMessage, canvasWidth, canvasHeight, trayHeight, trayTop);
-            return; // message replaces the flag grid for the duration
+            const bannerH = Math.min(22, Math.round(trayHeight * 0.28));
+            this._drawAsteroidBanner(ctx, asteroidMessage, canvasWidth, trayTop, bannerH);
+            gridTop = trayTop + bannerH;
+            gridH   = Math.max(0, trayHeight - bannerH);
         }
 
-        // ── Normal flag grid ──────────────────────────────────────────────────
+        // ── Normal flag grid (always shows eliminated flags) ─────────────────
         if (eliminated.length === 0) {
             this._layoutCache = null;
             return;
         }
 
         const availW = canvasWidth - padding * 2;
-        const availH = trayHeight  - padding * 2;
+        const availH = Math.max(4, gridH - padding * 2);
 
         const aspect = 1.5;   // standard flag ratio (width:height = 3:2)
         const gapX   = 2;
         const gapY   = 2;
 
-        const cacheKey = `${eliminated.length}|${canvasWidth}|${trayHeight}`;
+        const cacheKey = `${eliminated.length}|${canvasWidth}|${gridH}|${msgActive ? 1 : 0}`;
         let layout = this._layoutCache;
 
         if (!layout || layout.key !== cacheKey) {
@@ -81,8 +86,8 @@ export default class BottomTrayRenderer {
             const flagW  = Math.round(flagH * aspect);
             const cols   = Math.max(1, Math.floor((availW + gapX) / (flagW + gapX)));
             const rows   = Math.ceil(eliminated.length / cols);
-            const gridH  = rows * (flagH + gapY) - gapY;
-            const startY = trayTop + padding + Math.max(0, (availH - gridH) / 2);
+            const usedH  = rows * (flagH + gapY) - gapY;
+            const startY = gridTop + padding + Math.max(0, (availH - usedH) / 2);
 
             layout = { key: cacheKey, flagH, flagW, cols, rows, startY };
             this._layoutCache = layout;
@@ -100,6 +105,7 @@ export default class BottomTrayRenderer {
             const fy = startY  + row * (flagH + gapY);
 
             const img = flag.country?.image;
+            const byAsteroid = !!flag._eliminatedByAsteroid;
 
             if (img && img.complete && img.naturalWidth > 0) {
                 ctx.save();
@@ -112,16 +118,53 @@ export default class BottomTrayRenderer {
                 ctx.restore();
 
                 if (flagH >= 8) {
-                    ctx.strokeStyle = 'rgba(244, 247, 255, 0.10)';
-                    ctx.lineWidth   = 0.5;
+                    ctx.strokeStyle = byAsteroid
+                        ? 'rgba(255,136,68,0.70)'
+                        : 'rgba(244, 247, 255, 0.10)';
+                    ctx.lineWidth   = byAsteroid ? 1 : 0.5;
                     ctx.strokeRect(fx, fy, flagW, flagH);
                 }
 
             } else {
-                ctx.fillStyle = '#172B50';
+                ctx.fillStyle = byAsteroid ? '#2A1500' : '#172B50';
                 ctx.fillRect(fx, fy, flagW, flagH);
             }
         }
+    }
+
+    /** Compact asteroid banner (top of bottom tray) — does not replace flag grid. */
+    _drawAsteroidBanner(ctx, msg, cw, trayTop, bannerH) {
+        const age = Date.now() - msg.time;
+        const fadeAlpha = age > 4000 ? Math.max(0, 1 - (age - 4000) / 1000) : 1;
+        const n = msg.countries?.length ?? 0;
+
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+        ctx.fillStyle = 'rgba(60, 22, 8, 0.92)';
+        ctx.fillRect(0, trayTop, cw, bannerH);
+        ctx.strokeStyle = 'rgba(255,136,68,0.45)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, trayTop + bannerH);
+        ctx.lineTo(cw, trayTop + bannerH);
+        ctx.stroke();
+
+        const labelSize = Math.max(9, Math.round(bannerH * 0.55));
+        ctx.fillStyle    = '#FF8844';
+        ctx.font         = gf(700, labelSize);
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor  = 'rgba(255,80,0,0.45)';
+        ctx.shadowBlur   = 5;
+        ctx.fillText(
+            n > 0
+                ? `☄️  Asteroid: ${n} eliminated`
+                : '☄️  Eliminated by Asteroid Shower',
+            cw / 2,
+            trayTop + bannerH / 2
+        );
+        ctx.shadowBlur = 0;
+        ctx.restore();
     }
 
     // ── Asteroid shower message ───────────────────────────────────────────────

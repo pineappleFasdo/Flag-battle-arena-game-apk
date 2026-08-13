@@ -2,7 +2,8 @@ import Matter from "matter-js";
 
 /**
  * LAST STANDING — slow sequential exits.
- * Fixed gap 2, mild motion, moderate funnel so flags can leave but not rush out.
+ * Starts with a modest gap; ArenaPhysics progressive widen opens it further
+ * as flags leave so the disc opening increases during the elim round.
  */
 export default class LastStandingEvent {
     name  = "LAST STANDING";
@@ -14,8 +15,8 @@ export default class LastStandingEvent {
     _origMaxGap     = 3;
     _frame          = 0;
 
-    // Single source for final gap size
-    static GAP = 2;
+    // Starting gap for final; max is controlled by Game + ArenaPhysics
+    static GAP = 3;
 
     start({ arena, flagManager }) {
         if (arena) {
@@ -25,10 +26,11 @@ export default class LastStandingEvent {
 
             const g = LastStandingEvent.GAP;
             arena.rotationSpeed  = 0.016;
+            // Do not clamp maxGap — allow progressive widen from ArenaPhysics
             arena.initialGapSize = g;
-            arena.maxGapSize     = g;
+            if (arena.maxGapSize < g) arena.maxGapSize = g;
             if (arena.state === "PLAYING") {
-                arena.gapSize = g;
+                arena.gapSize = Math.max(arena.gapSize || 0, g);
             }
             arena._lastStandingActive = true;
         }
@@ -57,8 +59,9 @@ export default class LastStandingEvent {
         const g = LastStandingEvent.GAP;
 
         arena.rotationSpeed = 0.016;
+        // Do not force gap closed/fixed — progressive widen lives in ArenaPhysics
         if (arena.gapSize === 0) return;
-        if (arena.gapSize > 0) {
+        if (arena.gapSize > 0 && arena.gapSize < g) {
             arena.gapSize = g;
         }
 

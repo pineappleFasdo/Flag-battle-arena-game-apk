@@ -143,6 +143,7 @@ export default class Game {
 
         // Final-mode stalemate clock (mirrors WinnerManager qualifying logic)
         this._finalStalemateSince = 0;
+        this._emptyArenaSince     = 0;
 
         // ── Highest Winner Wins — sudden death tiebreaker ─────────────────
         this._hwSuddenDeathActive   = false;
@@ -494,10 +495,10 @@ export default class Game {
         );
         this._nextSpawnPositions = positions;
         // Few countries → large spacing → oversized flags that can't exit the gap.
-        // Cap at the same max used in Final Mode so size matches normal events.
-        const rawW = Math.max(10, spacing * 1.05);
-        this._nextFlagW = Math.min(rawW, 22);
-        this._nextFlagH = Math.max(7, Math.round(this._nextFlagW * 0.667));
+        // Match the tighter final-mode cap so size stays consistent.
+        const rawW = Math.max(9, spacing * 0.85);
+        this._nextFlagW = Math.min(rawW, 14);
+        this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));
 
         this._clearAllFlags();
 
@@ -591,11 +592,14 @@ export default class Game {
             this.layout.arenaX, this.layout.arenaY, spawnRadius, this.totalCountries
         );
         this._nextSpawnPositions = positions;
-        // Cap flag size so final round (few countries) matches qualify size
-        const rawW = Math.max(10, spacing * 1.05);
-        const maxW = this.isFinalMode ? 22 : 32;
+        // Keep flags small enough to exit the gap. Fewer countries → larger spacing;
+        // hard-cap so elim / low-count rounds never spawn oversized flags.
+        const rawW = Math.max(9, spacing * 0.85);
+        const maxW = this.isFinalMode
+            ? 14
+            : (this.totalCountries <= 40 ? 16 : (this.totalCountries <= 100 ? 20 : 24));
         this._nextFlagW = Math.min(rawW, maxW);
-        this._nextFlagH = Math.max(7, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
+        this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
         this._clearAllFlags();
 
@@ -654,6 +658,7 @@ export default class Game {
         this._finalElimFreezeUntil = 0;
         this._finalElimPhase   = null;
         this._finalStalemateSince = 0;
+        this._emptyArenaSince     = 0;
 
         // Sudden death tiebreaker reset
         this._hwSuddenDeathActive = false;
@@ -690,8 +695,10 @@ export default class Game {
             this.layout.arenaX, this.layout.arenaY, spawnRadius, this.totalCountries
         );
         this._nextSpawnPositions = positions;
-        this._nextFlagW = Math.max(10, Math.min(32, spacing * 1.05));
-        this._nextFlagH = Math.max(7, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
+        const rawW0 = Math.max(9, spacing * 0.85);
+        const maxW0 = this.totalCountries <= 40 ? 16 : (this.totalCountries <= 100 ? 20 : 24);
+        this._nextFlagW = Math.min(rawW0, maxW0);
+        this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
         this.eventManager.pick();
         this._beginNextEvent();
@@ -710,18 +717,20 @@ export default class Game {
         this.arena.introTimer    = 0;
         this.arena.introDuration = 99999;
         this.arena.gapSize       = 0;
-        // Lock gap fixed every round (never widens). Final = tiny gap for slow exits.
+        // Base gap + progressive widen as flags are eliminated (see ArenaPhysics.setRemainingFlags).
+        // Final starts a bit tighter so exits feel deliberate at the start.
         if (this.isFinalMode) {
-            this.arena.initialGapSize = 2;  // final: slow deliberate exits
-            this.arena.maxGapSize     = 2;
+            this.arena.initialGapSize = 3;
+            this.arena.maxGapSize     = 8;
         } else {
-            this.arena.initialGapSize = 3;  // qualifying: 30-40s rounds
-            this.arena.maxGapSize     = 3;
+            this.arena.initialGapSize = 3;  // qualifying: ~30-40s rounds with progressive open
+            this.arena.maxGapSize     = 7;
         }
         this.arena.syncWalls();
 
         this.winnerManager.reset();
         this._finalStalemateSince = 0;
+        this._emptyArenaSince     = 0;
 
         this._spawnPositions = this._nextSpawnPositions;
         this._spawnFlagW     = this._nextFlagW;
@@ -797,10 +806,12 @@ export default class Game {
 
     /**
      * Immediately eliminates a flag that was incinerated by an asteroid.
-     * Called from SpaceTheme.onFlagBurned during the draw phase.
+     * Called from SpaceTheme.onFlagBurned during the draw/update phase.
+     * Must count toward elimination batch so 0-flags ends the round.
      */
     _handleAsteroidBurn(flag, x, y) {
         if (!flag || !flag.body) return;
+        if (this.gameState !== "PLAYING") return;
 
         // Guard: flag might have already been eliminated (race condition)
         const flagIdx = this.flagManager?.flags?.indexOf(flag);
@@ -812,34 +823,50 @@ export default class Game {
         // Remove from live flags list
         this.flagManager.flags.splice(flagIdx, 1);
 
-        // Record as eliminated
-        this.eliminationManager.eliminated.push(flag);
+        // Tag so tray / UI can style asteroid kills
+        flag._eliminatedByAsteroid = true;
 
-        // Update asteroid elimination message tracking
+        // Record as eliminated + track this frame's batch size
+        // (WinnerManager uses _lastBatchSize when remaining hits 0)
+        this.eliminationManager.eliminated.push(flag);
+        this.eliminationManager._lastBatchSize =
+            (this.eliminationManager._lastBatchSize || 0) + 1;
+
+        // Update asteroid elimination message tracking (below leaderboard + tray)
         if (!this._asteroidElimMsg) {
             this._asteroidElimMsg = { countries: [], time: Date.now() };
-        } else {
-            // If it's been more than 8 seconds since last shower, start a fresh msg
-            if (Date.now() - this._asteroidElimMsg.time > 8000) {
-                this._asteroidElimMsg = { countries: [], time: Date.now() };
-            }
+        } else if (Date.now() - this._asteroidElimMsg.time > 8000) {
+            this._asteroidElimMsg = { countries: [], time: Date.now() };
         }
-        // Add country if not already listed for this shower
         const alreadyListed = this._asteroidElimMsg.countries.some(
             f => (f.country?.code ?? f.code) === flag.country?.code
         );
         if (!alreadyListed) {
             this._asteroidElimMsg.countries.push(flag);
         }
-        // Bump the timestamp so the message stays visible after each new burn
         this._asteroidElimMsg.time = Date.now();
+
+        const left = this.flagManager.flags.length;
 
         // Sound & milestone feedback
         this.audio?.playElimination?.();
-        this.audio?.playMilestone?.(this.flagManager.flags.length, this.totalCountries);
+        this.audio?.playMilestone?.(left, this.totalCountries);
+        this.audio?.playAsteroidHit?.();
 
-        // Update remaining-flag counter on arena
-        this.arena?.setRemainingFlags?.(this.flagManager.flags.length);
+        // Update remaining-flag counter on arena (progressive gap)
+        this.arena?.setRemainingFlags?.(left);
+
+        // Final mode: sequential elim card path
+        if (this.isFinalMode) {
+            this._handleFinalElimination();
+            return;
+        }
+
+        // Qualifying / Highest Wins: force winner resolution when 0 or 1 left
+        // so an asteroid wipe (or last-survivor burn) cannot leave the round stuck.
+        if (left <= 1) {
+            this.winnerManager.update(this.flagManager, this.eliminationManager);
+        }
     }
 
     _clearAllFlags() {
@@ -992,7 +1019,11 @@ export default class Game {
 
                 if (this.isFinalMode) {
                     this._updateElimFlashes();
-                    if (evenFrame && !this._finalElimFreeze) this._checkFinalStalemate();
+                    if (evenFrame && !this._finalElimFreeze) {
+                        this._checkFinalStalemate();
+                        // Safety: empty arena must never soft-lock Last Standing
+                        this._recoverEmptyFinalArena();
+                    }
                 }
             }
 
@@ -1006,6 +1037,54 @@ export default class Game {
         this.fx.update();
     }
 
+    /**
+     * If Last Standing ends up with 0 live flags but finalists still exist
+     * (e.g. multi-exit / asteroid race), resolve instead of spinning forever.
+     */
+    _recoverEmptyFinalArena() {
+        if (!this.isFinalMode || this.gameState !== "PLAYING") return;
+        if (this._finalElimFreeze) return;
+
+        const live = this.flagManager?.flags?.length ?? 0;
+        if (live > 0) {
+            this._emptyArenaSince = 0;
+            return;
+        }
+
+        const now = performance.now();
+        if (!this._emptyArenaSince) {
+            this._emptyArenaSince = now;
+            return;
+        }
+        // Brief grace so a same-frame push-back can finish
+        if (now - this._emptyArenaSince < 400) return;
+
+        this._emptyArenaSince = 0;
+        const n = this._finalists?.length ?? 0;
+
+        if (n === 1) {
+            this._triggerGrandChampion(this._finalists[0].country);
+            return;
+        }
+        if (n === 0) {
+            // Fall back to last eliminated as champion
+            const last = this._finalEliminated[this._finalEliminated.length - 1];
+            if (last?.country) {
+                this._triggerGrandChampion(last.country);
+            } else {
+                this._beginNextEvent();
+            }
+            return;
+        }
+
+        // Multiple finalists tracked but no live bodies — respawn them and continue
+        this.audio.speak("Recovering finalists!");
+        this._finalists = this._finalists.slice();
+        this.activeCountries = this._finalists.map(f => f.country);
+        this.totalCountries = this.activeCountries.length;
+        this._beginNextEvent();
+    }
+
     // ── Final mode stalemate (few flags jammed, never exiting) ────────────────
     // Mirrors WinnerManager qualifying stalemate: after ~2.5s of near-stillness
     // with 2–8 flags left, treat as a full-tie and replay the final round.
@@ -1014,6 +1093,7 @@ export default class Game {
         const flags = this.flagManager?.flags;
         if (!flags || flags.length < 2 || flags.length > 8) {
             this._finalStalemateSince = 0;
+        this._emptyArenaSince     = 0;
             return;
         }
 
@@ -1027,6 +1107,7 @@ export default class Game {
 
         if (maxSpd >= 0.55) {
             this._finalStalemateSince = 0;
+        this._emptyArenaSince     = 0;
             return;
         }
 
@@ -1038,6 +1119,7 @@ export default class Game {
         if (now - this._finalStalemateSince < 2500) return;
 
         this._finalStalemateSince = 0;
+        this._emptyArenaSince     = 0;
         this.eventManager.end(this._eventCtx());
 
         // Same path as simultaneous full drain: keep these finalists, replay.
@@ -1066,41 +1148,49 @@ export default class Game {
 
         // Flags that left the arena this frame
         const batch = eliminated.slice(-batchSize);
+        if (!batch.length) return;
 
         // ── One flag only ──────────────────────────────────────────────────
         const primary = batch[0];
         const extras  = batch.slice(1);
 
-        // Push any extra simultaneous exits back inside the arena
+        // Push any extra simultaneous exits back inside the arena AND
+        // re-add them to flagManager (eliminationManager already removed them).
         if (extras.length) {
             this._pushFlagsBackInside(extras);
         }
 
         // Officially eliminate only the primary flag
-        const code = primary.country.code;
+        const code = primary.country?.code;
+        if (!code) return;
         this._finalists = this._finalists.filter(f => f.country.code !== code);
         this._finalEliminated.push({ country: primary.country });
 
         // Strip extras from eliminationManager.eliminated so they aren't counted
         if (extras.length) {
-            const extraCodes = new Set(extras.map(f => f.country.code));
+            const extraCodes = new Set(extras.map(f => f.country?.code));
             this.eliminationManager.eliminated =
                 this.eliminationManager.eliminated.filter(
-                    f => !extraCodes.has(f.country.code)
+                    f => !extraCodes.has(f.country?.code)
                 );
+            // Batch size is now only the primary
+            this.eliminationManager._lastBatchSize = 1;
         }
 
         const remaining = this._finalists.length;
 
         if (remaining === 0) {
-            // Shouldn't happen with one-at-a-time, but safety: treat as tie replay
-            this._finalists = [{ country: primary.country }, ...extras.map(f => ({ country: f.country }))];
-            this._finalEliminated = this._finalEliminated.filter(e => e.country.code !== code);
+            // All finalists gone in one wave — crown last primary as champion
+            // (better than infinite empty-arena stuck state)
             this._elimFlashQueue = [];
             this._finalElimActive = null;
             this._finalElimPhase = null;
             this._finalElimFreeze = false;
-            this._beginNextEvent();
+            if (primary.country) {
+                this._triggerGrandChampion(primary.country);
+            } else {
+                this._beginNextEvent();
+            }
             return;
         }
 
@@ -1116,7 +1206,9 @@ export default class Game {
         // Seal the gap (arena rebuilds solid ring) while card shows
         this._startFinalElimFreeze(primary.country, remaining);
 
-        this.arena.setRemainingFlags(this.flagManager.flags.length);
+        // Keep counters in sync with finalists + live physics flags
+        const live = this.flagManager.flags.length;
+        this.arena.setRemainingFlags(Math.max(live, remaining));
         this.totalCountries = this._finalists.length;
 
         if (primary.country?.name) {
@@ -1133,6 +1225,19 @@ export default class Game {
         for (const flag of flags) {
             const body = flag.body;
             if (!body) continue;
+
+            // Ensure body is in the physics world again
+            try {
+                if (!this.physics.world.bodies.includes(body)) {
+                    Matter.World.add(this.physics.world, body);
+                }
+            } catch (_) { /* already in world */ }
+
+            // Re-add to live flags list if missing (critical — without this
+            // simultaneous multi-exit leaves an empty arena forever)
+            if (this.flagManager && !this.flagManager.flags.includes(flag)) {
+                this.flagManager.flags.push(flag);
+            }
 
             // Random position inside the ring so they rejoin the pack
             const ang = Math.random() * Math.PI * 2;
@@ -1229,12 +1334,14 @@ export default class Game {
         this._finalElimActive = null;
         this._elimFlashQueue = [];
         this._finalStalemateSince = 0;
+        this._emptyArenaSince     = 0;
 
-        // Fixed small gap in final — slow sequential exits, never grows
-        this.arena.gapSize = 2;
-        this.arena.initialGapSize = 2;
-        this.arena.maxGapSize = 2;
+        // Restore progressive gap (initial → max as remaining flags drop)
+        this.arena.initialGapSize = 3;
+        this.arena.maxGapSize     = 8;
         this.arena.state = "PLAYING";
+        // Recompute gap from current remaining count
+        this.arena.setRemainingFlags(this.flagManager?.flags?.length ?? 0);
         this.arena.syncWalls();
     }
 
@@ -1242,6 +1349,7 @@ export default class Game {
         // Legacy path retained if anything still enters ELIM_SHOW
         this._elimShowCountry = null;
         this._finalStalemateSince = 0;
+        this._emptyArenaSince     = 0;
         this.arena.state   = "PLAYING";
         this.arena.gapSize = this.arena.initialGapSize;
         this.arena.syncWalls();
@@ -1333,15 +1441,28 @@ export default class Game {
             this.layout.lbRowH, this.layout.lbRowCount
         );
 
+        // Asteroid eliminations strip — just below the leaderboard
+        if (this.theme?.stars && this._asteroidElimMsg) {
+            this._drawAsteroidElimStrip(ctx);
+        }
+
         this.arenaRenderer.draw(ctx, this.arena, this.theme);
         this.flagManager.draw(ctx);
         this.trayLauncher.draw(ctx);
 
         if (this.gameState === "PLAYING") {
+            // Final mode: use finalist totals so the bar never goes negative
+            // after simultaneous multi-exits / recovery.
+            const elimList = this.isFinalMode
+                ? this._finalEliminated
+                : (this.eliminationManager?.eliminated ?? []);
+            const totalN = this.isFinalMode
+                ? (this._finalTotalCount || this.totalCountries)
+                : this.totalCountries;
             this.progressBarRenderer.draw(
                 ctx,
-                this.eliminationManager?.eliminated ?? [],
-                this.totalCountries,
+                elimList,
+                totalN,
                 this.layout.barCenterX, this.layout.barY,
                 this.layout.barWidth,   this.layout.barHeight
             );
@@ -1415,6 +1536,102 @@ export default class Game {
     // Delegates star/nebula/asteroid rendering to SpaceTheme
     _drawThemeStars(ctx) {
         this.spaceTheme.draw(ctx, this._lw, this._lh);
+    }
+
+    /**
+     * Compact strip just under the leaderboard listing flags burned by asteroids.
+     * Visible for ~6s after the last burn in a shower.
+     */
+    _drawAsteroidElimStrip(ctx) {
+        const msg = this._asteroidElimMsg;
+        if (!msg?.countries?.length) return;
+        const age = Date.now() - msg.time;
+        if (age > 6000) return;
+
+        const fade = age > 5000 ? Math.max(0, 1 - (age - 5000) / 1000) : 1;
+        const lbBottom = this.layout.lbY + this.layout.lbZoneH;
+        const stripH = Math.max(22, Math.round(this.layout.lbRowH * 0.95));
+        const y = lbBottom + 2;
+        const x = this.layout.lbX;
+        const w = this.layout.lbW;
+
+        ctx.save();
+        ctx.globalAlpha = fade;
+
+        // Background
+        ctx.fillStyle = "rgba(48, 16, 6, 0.92)";
+        if (typeof ctx.roundRect === "function") {
+            ctx.beginPath();
+            ctx.roundRect(x, y, w, stripH, 6);
+            ctx.fill();
+        } else {
+            ctx.fillRect(x, y, w, stripH);
+        }
+        ctx.strokeStyle = "rgba(255,136,68,0.55)";
+        ctx.lineWidth = 1;
+        if (typeof ctx.roundRect === "function") {
+            ctx.beginPath();
+            ctx.roundRect(x, y, w, stripH, 6);
+            ctx.stroke();
+        } else {
+            ctx.strokeRect(x, y, w, stripH);
+        }
+
+        // Label
+        const fs = Math.max(9, Math.round(stripH * 0.42));
+        ctx.font = gf(700, fs);
+        ctx.fillStyle = "#FF8844";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        const label = "☄️ ASTEROID";
+        ctx.fillText(label, x + 8, y + stripH / 2);
+        let cursor = x + 8 + ctx.measureText(label).width + 10;
+
+        // Flag thumbs + names
+        const flagH = Math.max(10, stripH - 8);
+        const flagW = Math.round(flagH * 1.5);
+        const nameFs = Math.max(8, Math.round(flagH * 0.55));
+        ctx.font = gf(600, nameFs);
+        ctx.fillStyle = "#F4F7FF";
+
+        const maxX = x + w - 8;
+        for (const flag of msg.countries) {
+            if (cursor + flagW + 4 > maxX) break;
+            const img = flag.country?.image ?? flag.image;
+            const nm  = flag.country?.name  ?? flag.name ?? "";
+            const fy  = y + (stripH - flagH) / 2;
+
+            if (img && img.complete && img.naturalWidth > 0) {
+                ctx.save();
+                ctx.beginPath();
+                if (typeof ctx.roundRect === "function") {
+                    ctx.roundRect(cursor, fy, flagW, flagH, 2);
+                } else {
+                    ctx.rect(cursor, fy, flagW, flagH);
+                }
+                ctx.clip();
+                ctx.drawImage(img, cursor, fy, flagW, flagH);
+                ctx.restore();
+                ctx.strokeStyle = "rgba(255,136,68,0.7)";
+                ctx.lineWidth = 1;
+                ctx.strokeRect(cursor, fy, flagW, flagH);
+            } else {
+                ctx.fillStyle = "#2A1500";
+                ctx.fillRect(cursor, fy, flagW, flagH);
+                ctx.fillStyle = "#F4F7FF";
+            }
+            cursor += flagW + 4;
+
+            const nmW = ctx.measureText(nm).width;
+            if (cursor + nmW + 8 > maxX) {
+                // skip name if no room
+            } else {
+                ctx.fillText(nm, cursor, y + stripH / 2);
+                cursor += nmW + 10;
+            }
+        }
+
+        ctx.restore();
     }
 
     _drawCentralOverlay(ctx) {

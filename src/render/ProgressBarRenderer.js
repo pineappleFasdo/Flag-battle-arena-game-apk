@@ -4,8 +4,9 @@ export default class ProgressBarRenderer {
     draw(ctx, eliminatedFlags, total, centerX, y, width, barHeight = 18) {
 
         const eliminated = eliminatedFlags.length;
-        const alive      = total - eliminated;
-        const fraction   = total > 0 ? alive / total : 0;
+        // Clamp so multi-exit / recovery never shows negative counts on stream
+        const alive      = Math.max(0, total - eliminated);
+        const fraction   = total > 0 ? Math.max(0, Math.min(1, alive / total)) : 0;
 
         const barX = centerX - width / 2;
         const barY = y;

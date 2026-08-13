@@ -14,7 +14,7 @@ export const THEMES = {
         id: 'space',
         name: 'Space',
         icon: '🚀',
-        bg: '#02010a',
+        bg: '#010008',
         ring: 'rgba(160, 120, 255, 0.95)',
         ringGlow: 'rgba(120, 200, 255, 0.40)',
         ringOuter: 'rgba(100, 80, 200, 0.30)',
