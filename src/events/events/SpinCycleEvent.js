@@ -25,7 +25,7 @@ export default class SpinCycleEvent {
         this._direction    = Math.random() < 0.5 ? 1 : -1;
         this._origRotation = arena.rotationSpeed;
 
-        arena.rotationSpeed = 0.055;
+        arena.rotationSpeed = 0.040;
 
         // Give every flag an initial angular kick
         for (const flag of flagManager.flags) {
@@ -36,8 +36,8 @@ export default class SpinCycleEvent {
             const tx  = -dy / (Math.hypot(dx, dy) || 1);
             const ty  =  dx / (Math.hypot(dx, dy) || 1);
             Matter.Body.setVelocity(b, {
-                x: b.velocity.x + tx * this._direction * 4.5,
-                y: b.velocity.y + ty * this._direction * 4.5,
+                x: b.velocity.x + tx * this._direction * 3.0,
+                y: b.velocity.y + ty * this._direction * 3.0,
             });
         }
     }
@@ -78,8 +78,8 @@ export default class SpinCycleEvent {
 
             // Cap speed to prevent runaway
             const spd = Math.hypot(body.velocity.x, body.velocity.y);
-            if (spd > 12) {
-                const s = 12 / spd;
+            if (spd > 8) {
+                const s = 8 / spd;
                 Matter.Body.setVelocity(body, {
                     x: body.velocity.x * s,
                     y: body.velocity.y * s,

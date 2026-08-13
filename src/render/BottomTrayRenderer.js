@@ -1,4 +1,8 @@
+import { gf, GAME_FONT } from '../GameFont.js';
 // Bottom tray — eliminated flags strip (broadcast navy panel)
+// Supports an optional asteroidMessage: { countries: [flag,...], time: ms }
+// When present and recent (<= 5 s), shows the "Eliminated by Asteroid Shower"
+// overlay with flag images + country names; flag grid still runs beneath it.
 
 export default class BottomTrayRenderer {
 
@@ -6,7 +10,15 @@ export default class BottomTrayRenderer {
         this._layoutCache = null;
     }
 
-    draw(ctx, eliminated, canvasWidth, canvasHeight, trayHeight = 80) {
+    /**
+     * @param {CanvasRenderingContext2D} ctx
+     * @param {Array}  eliminated      - all eliminated flag objects
+     * @param {number} canvasWidth
+     * @param {number} canvasHeight
+     * @param {number} trayHeight
+     * @param {object|null} asteroidMessage  - { countries:[flag,...], time:ms }
+     */
+    draw(ctx, eliminated, canvasWidth, canvasHeight, trayHeight = 80, asteroidMessage = null) {
 
         const padding = 5;
         const trayTop = canvasHeight - trayHeight;
@@ -25,6 +37,17 @@ export default class BottomTrayRenderer {
         ctx.lineTo(canvasWidth, trayTop);
         ctx.stroke();
 
+        // ── Asteroid shower message overlay ──────────────────────────────────
+        const msgActive = asteroidMessage &&
+            asteroidMessage.countries?.length > 0 &&
+            Date.now() - asteroidMessage.time < 5000;
+
+        if (msgActive) {
+            this._drawAsteroidMessage(ctx, asteroidMessage, canvasWidth, canvasHeight, trayHeight, trayTop);
+            return; // message replaces the flag grid for the duration
+        }
+
+        // ── Normal flag grid ──────────────────────────────────────────────────
         if (eliminated.length === 0) {
             this._layoutCache = null;
             return;
@@ -33,7 +56,7 @@ export default class BottomTrayRenderer {
         const availW = canvasWidth - padding * 2;
         const availH = trayHeight  - padding * 2;
 
-        const aspect = 1.43;
+        const aspect = 1.5;   // standard flag ratio (width:height = 3:2)
         const gapX   = 2;
         const gapY   = 2;
 
@@ -99,5 +122,108 @@ export default class BottomTrayRenderer {
                 ctx.fillRect(fx, fy, flagW, flagH);
             }
         }
+    }
+
+    // ── Asteroid shower message ───────────────────────────────────────────────
+    _drawAsteroidMessage(ctx, msg, cw, ch, trayH, trayTop) {
+        const countries = msg.countries;
+        const age       = Date.now() - msg.time;
+        // Fade out in last second
+        const fadeAlpha = age > 4000 ? Math.max(0, 1 - (age - 4000) / 1000) : 1;
+
+        ctx.save();
+        ctx.globalAlpha = fadeAlpha;
+
+        // ── Header line ───────────────────────────────────────────────────────
+        const headerH   = Math.round(trayH * 0.38);
+        const labelSize = Math.max(9, Math.round(headerH * 0.52));
+
+        ctx.fillStyle    = '#FF8844';
+        ctx.font         = gf(700, labelSize);
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor  = 'rgba(255,80,0,0.55)';
+        ctx.shadowBlur   = 6;
+        ctx.fillText('☄️  Eliminated by Asteroid Shower', cw / 2, trayTop + headerH / 2);
+        ctx.shadowBlur = 0;
+
+        // ── Flag + name row ───────────────────────────────────────────────────
+        const rowY   = trayTop + headerH;
+        const rowH   = trayH - headerH;
+        const flagH  = Math.min(Math.round(rowH * 0.72), 36);
+        const flagW  = Math.round(flagH * 1.5);  // standard 3:2 flag ratio
+        const nameFs = Math.max(8, Math.round(flagH * 0.42));
+        const gap    = 10;
+
+        // Measure total width
+        ctx.font = gf(600, nameFs);
+        let totalW = 0;
+        for (const flag of countries) {
+            const nm = flag.country?.name ?? flag.name ?? '';
+            totalW += flagW + 5 + ctx.measureText(nm).width + gap;
+        }
+        totalW = Math.max(0, totalW - gap);
+
+        // Clamp to canvas width with padding
+        const maxW  = cw - 20;
+        const scale = totalW > maxW ? maxW / totalW : 1;
+        const effFlagW  = Math.round(flagW  * scale);
+        const effFlagH  = Math.round(flagH  * scale);
+        const effNameFs = Math.max(7, Math.round(nameFs * scale));
+        const effGap    = Math.round(gap * scale);
+
+        ctx.font = gf(600, effNameFs);
+
+        // Recompute width with effective sizes
+        let scaledTotalW = 0;
+        for (const flag of countries) {
+            const nm = flag.country?.name ?? flag.name ?? '';
+            scaledTotalW += effFlagW + 5 + ctx.measureText(nm).width + effGap;
+        }
+        scaledTotalW = Math.max(0, scaledTotalW - effGap);
+
+        let x = (cw - scaledTotalW) / 2;
+        const fy = rowY + (rowH - effFlagH) / 2;
+
+        for (const flag of countries) {
+            const img = flag.country?.image ?? flag.image;
+            const nm  = flag.country?.name  ?? flag.name ?? '';
+
+            // Flag thumbnail
+            if (img && img.complete && img.naturalWidth > 0) {
+                ctx.save();
+                ctx.beginPath();
+                if (typeof ctx.roundRect === 'function') {
+                    ctx.roundRect(x, fy, effFlagW, effFlagH, 2);
+                } else {
+                    ctx.rect(x, fy, effFlagW, effFlagH);
+                }
+                ctx.clip();
+                ctx.drawImage(img, x, fy, effFlagW, effFlagH);
+                ctx.restore();
+
+                // Orange tint border to indicate asteroid kill
+                ctx.strokeStyle = 'rgba(255,136,68,0.55)';
+                ctx.lineWidth   = 1;
+                ctx.beginPath();
+                if (typeof ctx.roundRect === 'function') ctx.roundRect(x, fy, effFlagW, effFlagH, 2);
+                else ctx.rect(x, fy, effFlagW, effFlagH);
+                ctx.stroke();
+            } else {
+                ctx.fillStyle = '#2A1500';
+                ctx.fillRect(x, fy, effFlagW, effFlagH);
+            }
+            x += effFlagW + 5;
+
+            // Country name
+            const nmW = ctx.measureText(nm).width;
+            ctx.fillStyle    = '#F4F7FF';
+            ctx.textAlign    = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(nm, x, fy + effFlagH / 2);
+            x += nmW + effGap;
+        }
+
+        ctx.restore();
     }
 }

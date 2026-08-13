@@ -1,3 +1,4 @@
+import { gf, GAME_FONT } from '../GameFont.js';
 // StatsRenderer.js — compact match statistics panel (broadcast style)
 
 import StatsManager from "../managers/StatsManager";
@@ -39,12 +40,12 @@ export default class StatsRenderer {
         // Title
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
-        ctx.font = `800 ${Math.max(10, lineH - 1)}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(800, Math.max(10, lineH - 1));
         ctx.fillStyle = '#38D5FF';
         ctx.fillText('STATS', panelX + padX, panelY + padY);
 
         // Rows
-        ctx.font = `500 ${Math.max(9, lineH - 2)}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(500, Math.max(9, lineH - 2));
         let y = panelY + padY + titleH;
 
         for (const row of rows) {

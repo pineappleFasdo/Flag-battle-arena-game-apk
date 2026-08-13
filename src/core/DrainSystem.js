@@ -55,13 +55,13 @@ export default class DrainSystem {
         const cx = this.arena.cx;
         const cy = this.arena.cy;
 
-        // Wider funnel early → more exits; shrink mode pulls almost everything
+        // Moderate funnel — wide enough to steer flags, narrow enough for 30-40s rounds
         const funnelHalfAngle = this.shrinkMode
             ? Math.PI
-            : Math.max(gapHalfAngle * 2.2, 0.22);
+            : Math.max(gapHalfAngle * 2.2, 0.28);  // narrower funnel → fewer flags pulled per pass
 
-        const tangentialMult = this.shrinkMode ? 12 : 0.7;
-        const ejectMult      = this.shrinkMode ? 9  : 0.7;
+        const tangentialMult = this.shrinkMode ? 12 : 0.85;  // gentle pull to gap
+        const ejectMult      = this.shrinkMode ? 9  : 0.80;  // gentle eject through gap
 
         for (const flag of flags) {
 
@@ -84,7 +84,7 @@ export default class DrainSystem {
             diff = Math.atan2(Math.sin(diff), Math.cos(diff));
 
             // PERFORMANCE: Only apply force when flag is near the rim
-            const nearWall = dist > this.arena.radius * (this.shrinkMode ? 0.40 : 0.55);
+            const nearWall = dist > this.arena.radius * (this.shrinkMode ? 0.40 : 0.60);  // only pull flags near the rim
             if (!nearWall) continue;
             if (Math.abs(diff) > funnelHalfAngle) continue;
 
@@ -93,7 +93,7 @@ export default class DrainSystem {
                 : (1 - Math.abs(diff) / funnelHalfAngle);
 
             // Stronger tangential pull → flags line up with gap faster
-            const tangentialStrength = 0.00055 * closeness * tangentialMult;
+            const tangentialStrength = 0.00075 * closeness * tangentialMult;  // stronger pull
 
             const tx  = -Math.sin(flagAngle);
             const ty  =  Math.cos(flagAngle);
@@ -109,7 +109,7 @@ export default class DrainSystem {
             const atBoundary  = dist > this.arena.radius * 0.70;
 
             if (inGapWindow && atBoundary) {
-                const ejectStrength = 0.0022 * ejectMult;
+                const ejectStrength = 0.0020 * ejectMult;  // gentle eject
 
                 Matter.Body.applyForce(body, body.position, {
                     x: (dx / dist) * ejectStrength,

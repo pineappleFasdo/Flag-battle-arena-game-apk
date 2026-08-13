@@ -1,21 +1,41 @@
+import { gf } from '../GameFont.js';
 /**
  * SpaceTheme.js — Space visual layer + Asteroid Shower mechanic
  *
  * ASTEROID SHOWER RULES:
  *  - Only fires during PLAYING state (Game.js calls notifyPlaying() on round start)
- *  - Minimum 15 s into a round before first shower; then random 20-45 s between showers
+ *  - Arena must be FULL/NEAR-FULL (≥ SHOWER_MIN_FILL_RATIO of total flags still alive)
+ *    so showers hit dense crowds, not the last few survivors
+ *  - Arena must NOT be near the end (< SHOWER_LOW_FILL_RATIO of total flags = no shower)
+ *  - Blocked during COUNTDOWN and NEXT_EVENT states (event-start flash / transition card)
+ *  - Random delay before each shower; timing is NOT predictable — fill ratio is checked
+ *    at the moment a shower would fire, so the player can't game it
  *  - 6-10 asteroids per shower, spread over ~4 s
  *  - Asteroids pass STRAIGHT THROUGH arena walls (no wall collision at all)
- *  - On flag hit: massive velocity set + applyForce so the flag rockets out of arena
+ *  - On flag hit: immediately eliminated via onFlagBurned callback
  *  - "☄️ ASTEROID SHOWER!" banner appears ONCE at shower start, gone after ~2 s
  *  - Banner never shows during NEXT_EVENT / COUNTDOWN / any non-PLAYING state
  *
  * Game.js calls:
  *   spaceTheme.notifyPlaying()          ← call in _startPlaying() to reset shower clock
- *   spaceTheme.update(lw,lh,flagManager,arenaX,arenaY,arenaRadius,Matter,gameState)
+ *   spaceTheme.update(lw,lh,flagManager,arenaX,arenaY,arenaRadius,Matter,gameState,currentFlags,totalFlags)
  *   spaceTheme.draw(ctx, lw, lh)
  *   spaceTheme.drawWarning(ctx, lw, lh)
  */
+// Asteroid showers only trigger when the arena fill ratio is within this band.
+// Rounds are fast (30-40 s, 249 flags), so the "full arena" window closes quickly.
+// We use a wide high-end band and a small low-end cutoff to protect survivors only.
+//
+// SHOWER_MIN_FILL_RATIO: arena must have at least this fraction of flags to allow a shower.
+//   Set low (0.35) so the window stays open for most of the round.
+// SHOWER_LOW_FILL_RATIO: below this fraction the event is basically over — block showers.
+//   Set to 0.10 (last ~25 of 249) so the final few survivors aren't wiped by asteroids.
+const SHOWER_MIN_FILL_RATIO = 0.35;  // arena must have ≥ 35 % of total flags alive
+const SHOWER_LOW_FILL_RATIO = 0.10;  // below 10 % = near end, always blocked
+
+// States that block new showers (transition screens / event-start flashes)
+const BLOCKED_STATES = new Set(["COUNTDOWN", "NEXT_EVENT", "WINNER_SHOW", "ELIM_SHOW"]);
+
 export default class SpaceTheme {
 
     constructor() {
@@ -37,9 +57,45 @@ export default class SpaceTheme {
         this._showerActiveFrames  = 0;
         this._isPlaying           = false;       // only true when game is PLAYING
 
+        // Flag count info — updated each frame from Game.js
+        this._currentFlags = 0;
+        this._totalFlags   = 0;
+
         // Warning banner
         this._warningLife = 0;
         this._WARNING_DUR = 120;  // 2 s at 60fps
+
+        // Burn effects — flags incinerated by asteroids
+        this._burnEffects = [];
+
+        // Callback: set from Game.js to handle immediate flag elimination
+        // Signature: (flag, x, y) => void
+        this.onFlagBurned = null;
+
+        // Audio reference — set by Game.js so SpaceTheme can trigger sounds
+        this.audio = null;
+    }
+
+    /**
+     * Returns true when the arena currently qualifies for an asteroid shower:
+     *  • fill ratio is high (arena is packed with flags)
+     *  • fill ratio is not dangerously low (event isn't almost over)
+     * This check is intentionally probabilistic — it is evaluated only at the
+     * moment a shower would fire, so the player cannot predict it by counting.
+     */
+    _arenaIsFull() {
+        const total = this._totalFlags;
+        if (total <= 0) return false;
+        const ratio = this._currentFlags / total;
+        return ratio >= SHOWER_MIN_FILL_RATIO;
+    }
+
+    /** Returns true when the event is near its end — showers are always blocked. */
+    _arenaIsNearEnd() {
+        const total = this._totalFlags;
+        if (total <= 0) return true;
+        const ratio = this._currentFlags / total;
+        return ratio < SHOWER_LOW_FILL_RATIO;
     }
 
     /** Call this from Game._startPlaying() every round */
@@ -52,18 +108,35 @@ export default class SpaceTheme {
         this._impacts             = [];
         this._warningLife         = 0;
         this._framesUntilShower   = this._randDelay(true);
+        this._burnEffects         = [];
+        this._currentFlags        = 0;
+        this._totalFlags          = 0;
     }
 
     /** Call when game leaves PLAYING (winner, next-event, etc.) */
     notifyNotPlaying() {
         this._isPlaying   = false;
         this._warningLife = 0;
+        this._burnEffects = [];
     }
 
-    /** First shower: 15-25 s; subsequent: 20-45 s */
+    /**
+     * Random delay before next shower check.
+     * Rounds are fast (30-40 s for 249 flags), so delays must be short
+     * enough to guarantee multiple showers per round while staying unpredictable.
+     * First shower: 4–9 s; subsequent: 5–14 s (wide enough variance to feel random).
+     * Even if a delay elapses, the shower only fires if the arena passes the fill check.
+     */
     _randDelay(first) {
-        if (first) return ((15 + Math.random() * 10) * 60) | 0;
-        return ((20 + Math.random() * 25) * 60) | 0;
+        if (first) {
+            // 4–9 s before the first shower — hits while the arena is still packed
+            const base = 4 + Math.random() * 5;
+            return (base * 60) | 0;
+        }
+        // 5–14 s between showers — fast enough for 2-4 showers per round,
+        // wide enough that players can't predict the next one by counting
+        const base = 5 + Math.random() * 9;
+        return (base * 60) | 0;
     }
 
     // ── build ─────────────────────────────────────────────────────────────────
@@ -155,20 +228,32 @@ export default class SpaceTheme {
     _startShower(lw, lh, arenaX, arenaY) {
         this._showerState         = "ACTIVE";
         this._showerActiveFrames  = 0;
-        const count = 6 + Math.floor(Math.random()*5);   // 6-10
+        const count = 8 + Math.floor(Math.random()*7);   // 8-14 asteroids per shower
         this._showerBatchLeft     = count;
-        this._showerBatchInterval = Math.max(1, Math.floor((4*60)/count));
+        // Spread over 3 s (was 4 s) so the shower feels intense and focused
+        this._showerBatchInterval = Math.max(1, Math.floor((3*60)/count));
         this._warningLife         = this._WARNING_DUR;
+
+        // 🔊 Swoosh — deep space whoosh as the shower begins
+        try { this.audio?.playAsteroidSwoosh?.(); } catch(e) {}
     }
 
     // ── Main update ───────────────────────────────────────────────────────────
-    update(lw, lh, flagManager, arenaX, arenaY, arenaRadius, Matter, gameState) {
+    update(lw, lh, flagManager, arenaX, arenaY, arenaRadius, Matter, gameState,
+           currentFlags = 0, totalFlags = 0) {
         if (!this._built || lw!==this._lw || lh!==this._lh) this.build(lw,lh);
 
         this._frame++;
 
+        // Track flag counts so shower eligibility checks can use them
+        this._currentFlags = currentFlags;
+        this._totalFlags   = totalFlags;
+
         // Sync playing state from gameState string (fallback if notifyPlaying not called)
         const playing = this._isPlaying && gameState === "PLAYING";
+
+        // Blocked states: event-start flash (COUNTDOWN), transition card (NEXT_EVENT), etc.
+        const stateBlocked = BLOCKED_STATES.has(gameState);
 
         // Twinkle stars always
         for (const s of this._stars){
@@ -179,13 +264,27 @@ export default class SpaceTheme {
         // Warning countdown
         if (this._warningLife > 0) this._warningLife--;
 
-        // ── Shower state machine (only while PLAYING) ─────────────────────────
-        if (playing) {
+        // ── Shower state machine (only while PLAYING and not in a blocked state) ──
+        if (playing && !stateBlocked) {
             this._playingFrames++;
 
             if (this._showerState === "WAITING") {
                 if (this._playingFrames >= this._framesUntilShower) {
-                    this._startShower(lw, lh, arenaX, arenaY);
+                    // Timer elapsed — check arena eligibility.
+                    if (this._arenaIsNearEnd()) {
+                        // Very few flags left (< 10%) — skip and reschedule short
+                        // so we're primed for the next round start.
+                        this._playingFrames     = 0;
+                        this._framesUntilShower = this._randDelay(false);
+                    } else if (this._arenaIsFull()) {
+                        // Arena has >= 35% flags alive — fire the shower!
+                        this._startShower(lw, lh, arenaX, arenaY);
+                    } else {
+                        // Mid-density (10-35%): tail of the round, reschedule
+                        // for next round rather than hanging in an indefinite stall.
+                        this._playingFrames     = 0;
+                        this._framesUntilShower = this._randDelay(false);
+                    }
                 }
             } else if (this._showerState === "ACTIVE") {
                 this._showerActiveFrames++;
@@ -204,9 +303,11 @@ export default class SpaceTheme {
                     this._framesUntilShower = this._randDelay(false);
                 }
             }
-        } else {
+        } else if (!playing) {
             // Not playing — keep asteroids moving until they exit, don't spawn new
         }
+        // stateBlocked + playing: timer pauses (playingFrames doesn't tick) so
+        // showers don't fire during event-start flash or transition cards
 
         // ── Move asteroids (always update existing ones so they exit cleanly) ─
         const flags    = flagManager?.flags ?? [];
@@ -242,45 +343,24 @@ export default class SpaceTheme {
                     const hitR = a.size*0.9 + (flag.width+flag.height)*0.30;
 
                     if (dx*dx+dy*dy < hitR*hitR) {
-                        const spd  = Math.sqrt(a.vx*a.vx+a.vy*a.vy);
-                        const dirX = a.vx/spd;
-                        const dirY = a.vy/spd;
-
-                        // 1. Direct velocity blast — set velocity to a huge value
-                        //    in the asteroid's travel direction so the flag rockets
-                        //    straight out of the arena and exits past the gap.
-                        //    Existing velocity is overridden completely.
-                        const blastSpeed = 28 + spd * 0.8;
-                        Matter.Body.setVelocity(flag.body, {
-                            x: dirX * blastSpeed,
-                            y: dirY * blastSpeed,
-                        });
-
-                        // 2. Also applyForce for a sustained push (reaches boundary faster)
-                        Matter.Body.applyForce(flag.body, bp, {
-                            x: dirX * a.size * 0.0018,
-                            y: dirY * a.size * 0.0018,
-                        });
-
-                        // 3. Wake the body
-                        Matter.Sleeping.set(flag.body, false);
-
-                        // 4. Violent spin
-                        Matter.Body.setAngularVelocity(
-                            flag.body,
-                            (Math.random()-0.5)*0.45
-                        );
-
-                        // 5. Asteroid continues STRAIGHT — no deflection.
-                        //    It's a massive rock, flags are nothing to it.
-                        //    (No velocity change on asteroid)
-
-                        // 6. Impact visual
+                        // ── BURN: immediately eliminate the flag ──────────────
+                        // Spawn burn visual at the flag's position
+                        this._spawnBurnEffect(bp.x, bp.y);
+                        // Also spawn asteroid impact at collision point
                         this._spawnImpact(a.x, a.y);
 
-                        a.hitCooldown = 30;
+                        // 🔊 Impact crack — meteor strike sound
+                        try { this.audio?.playAsteroidHit?.(); } catch(e) {}
+
+                        // Notify Game.js to remove this flag from physics + lists
+                        if (this.onFlagBurned) {
+                            this.onFlagBurned(flag, bp.x, bp.y);
+                        }
+
+                        // Asteroid continues straight — no deflection
+                        a.hitCooldown = 45;
                         a.hit = true;
-                        // don't break — one asteroid can hit multiple flags if aligned
+                        // don't break — one asteroid can burn multiple flags if aligned
                     }
                 }
             }
@@ -288,6 +368,22 @@ export default class SpaceTheme {
 
         for (let i=toRemove.length-1; i>=0; i--)
             this._asteroids.splice(toRemove[i],1);
+
+        // Burn effects update — fire particles where flags were incinerated
+        for (let i = this._burnEffects.length - 1; i >= 0; i--) {
+            const b = this._burnEffects[i];
+            b.life--;
+            for (const p of b.particles) {
+                p.x  += p.vx;
+                p.y  += p.vy;
+                p.vy += 0.07;  // slight gravity pulls sparks down
+                p.vx *= 0.93;
+                p.vy *= 0.93;
+                p.a  *= 0.91;
+                p.r  *= 0.96;
+            }
+            if (b.life <= 0) this._burnEffects.splice(i, 1);
+        }
 
         // Impact sparks update
         for (let i=this._impacts.length-1; i>=0; i--) {
@@ -301,6 +397,27 @@ export default class SpaceTheme {
             }
             if (imp.life<=0) this._impacts.splice(i,1);
         }
+    }
+
+    // ── Burn effect — fire & ember particles at flag position ───────────────
+    _spawnBurnEffect(x, y) {
+        const colours = ['255,90,10', '255,160,20', '255,220,80', '220,50,0', '255,40,0'];
+        const count   = 28 + Math.floor(Math.random() * 12);
+        const particles = [];
+        for (let i = 0; i < count; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            const spd = 1.2 + Math.random() * 4.5;
+            particles.push({
+                x, y,
+                vx: Math.cos(ang) * spd,
+                // bias upward so flames rise
+                vy: Math.sin(ang) * spd - 1.8 - Math.random() * 2.0,
+                a : 1.0,
+                r : 2.5 + Math.random() * 4.5,
+                color: colours[Math.floor(Math.random() * colours.length)],
+            });
+        }
+        this._burnEffects.push({ x, y, particles, life: 100, maxLife: 100 });
     }
 
     _spawnImpact(x, y) {
@@ -329,6 +446,7 @@ export default class SpaceTheme {
         this._drawStars(ctx);
         this._drawAsteroids(ctx);
         this._drawImpacts(ctx);
+        this._drawBurnEffects(ctx);
     }
 
     // ── Warning banner — only during shower, only if PLAYING ─────────────────
@@ -352,7 +470,7 @@ export default class SpaceTheme {
         const text  = '☄️  ASTEROID SHOWER!';
 
         ctx.save();
-        ctx.font = `900 ${fsize}px system-ui,Arial,sans-serif`;
+        ctx.font = gf(900, fsize);
         const tw   = ctx.measureText(text).width;
         const pad  = fsize*0.55;
         const boxW = tw+pad*2.4;
@@ -474,6 +592,26 @@ export default class SpaceTheme {
             }
             ctx.restore();
         }
+        ctx.restore();
+    }
+
+    _drawBurnEffects(ctx) {
+        if (this._burnEffects.length === 0) return;
+        ctx.save();
+        for (const b of this._burnEffects) {
+            for (const p of b.particles) {
+                if (p.r < 0.3 || p.a < 0.02) continue;
+                ctx.globalAlpha = Math.max(0, Math.min(1, p.a));
+                ctx.shadowColor = `rgba(${p.color},0.85)`;
+                ctx.shadowBlur  = 7;
+                ctx.fillStyle   = `rgba(${p.color},1)`;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, Math.max(0.3, p.r), 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur  = 0;
         ctx.restore();
     }
 

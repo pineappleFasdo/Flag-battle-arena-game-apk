@@ -14,22 +14,22 @@ export default class ArenaPhysics {
         this.cy     = cy;
         this.radius = radius;
 
-        this.rotationSpeed = 0.016;
+        this.rotationSpeed = 0.020;
         this.angle         = 0;
 
         // PERFORMANCE: 48 segments is visually almost identical and cuts wall physics cost ~50%
         this.segmentCount = 48;
         this.thickness    = 22;
 
-        // Fixed small gap for ALL qualifying rounds (no widen over time)
-        this.initialGapSize = 2;
-        this.maxGapSize     = 2;
+        // Gap size tuned for 30-40 sec rounds (3 segments = moderate drain)
+        this.initialGapSize = 3;
+        this.maxGapSize     = 3;
         this.gapSize        = 0;
 
         this.state           = STATE_INTRO;
         this.introDuration   = 180;
         this.introTimer      = 0;
-        this.openingDuration = 200; // gradual open to the fixed small gap
+        this.openingDuration = 120; // faster open so flags start draining sooner
         this.openingTimer    = 0;
 
         this.remainingFlags = 50;

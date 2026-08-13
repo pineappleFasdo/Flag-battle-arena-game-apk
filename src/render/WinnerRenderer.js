@@ -1,3 +1,4 @@
+import { gf, GAME_FONT } from '../GameFont.js';
 // WinnerRenderer.js
 // Premium champion presentation — blue/navy cinematic rays, gold for Champion/trophy/wins
 
@@ -127,7 +128,7 @@ export default class WinnerRender {
         ctx.globalAlpha  = fade;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.font         = `900 ${labelSize}px system-ui, Arial, sans-serif`;
+        ctx.font         = gf(900, labelSize);
         ctx.shadowBlur   = 12;
 
         if (isFinalMode) {
@@ -145,7 +146,7 @@ export default class WinnerRender {
         const img = winner.country?.image;
         if (img && img.complete && img.naturalWidth > 0) {
             const flagW = R * 0.58 * ease;
-            const flagH = flagW * 0.65;
+            const flagH = flagW * 0.667;  // standard 3:2 flag ratio
             const flagX = cx - flagW / 2;
             const flagY = cy - flagH / 2;
             const pad   = Math.max(4, flagW * 0.06);
@@ -192,7 +193,7 @@ export default class WinnerRender {
         ctx.globalAlpha  = fade;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.font         = `800 ${nameSize}px system-ui, Arial, sans-serif`;
+        ctx.font         = gf(800, nameSize);
         ctx.shadowColor  = 'rgba(0,0,0,0.90)';
         ctx.shadowBlur   = 12;
         ctx.fillStyle    = '#F4F7FF';
@@ -206,7 +207,7 @@ export default class WinnerRender {
             ctx.textAlign    = 'center';
             ctx.textBaseline = 'middle';
             const badgeSize  = Math.min(R * 0.13, 18);
-            ctx.font         = `700 ${badgeSize}px system-ui, Arial, sans-serif`;
+            ctx.font         = gf(700, badgeSize);
             ctx.shadowColor  = 'rgba(0,0,0,0.85)';
             ctx.shadowBlur   = 8;
             ctx.fillStyle    = '#38D5FF';
@@ -234,14 +235,14 @@ export default class WinnerRender {
         ctx.shadowBlur   = 16;
 
         const headingSize = Math.min(canvasWidth * 0.068, 56) * (0.9 + 0.1 * ease);
-        ctx.font      = `900 ${headingSize}px system-ui, Arial, sans-serif`;
+        ctx.font      = gf(900, headingSize);
         ctx.fillStyle = '#FF5368';
         ctx.fillText("IT'S A TIE!", cx, canvasHeight * 0.26);
 
         const countries = winner.countries ?? [];
         const maxShow   = Math.min(countries.length, 4);
         const flagW     = Math.min(canvasWidth * 0.15, 130) * ease;
-        const flagH     = flagW * 0.70;
+        const flagH     = flagW * 0.667;  // standard 3:2 flag ratio
         const gap       = Math.max(12, canvasWidth * 0.02);
         const totalW    = maxShow * flagW + (maxShow - 1) * gap;
         const startX    = (canvasWidth - totalW) / 2;
@@ -262,13 +263,13 @@ export default class WinnerRender {
                 ctx.strokeRect(x, flagY, flagW, flagH);
             }
             const nameSize = Math.min(canvasWidth * 0.024, 17);
-            ctx.font      = `700 ${nameSize}px system-ui, Arial, sans-serif`;
+            ctx.font      = gf(700, nameSize);
             ctx.fillStyle = '#F4F7FF';
             ctx.shadowBlur = 8;
             ctx.fillText(countries[i].name.toUpperCase(), x + flagW / 2, flagY + flagH + 16);
         }
 
-        ctx.font      = `600 ${Math.min(canvasWidth * 0.028, 20)}px system-ui, Arial, sans-serif`;
+        ctx.font      = gf(600, Math.min(canvasWidth * 0.028, 20));
         ctx.fillStyle = '#91A7C9';
         ctx.shadowBlur = 8;
         ctx.fillText('exited the arena simultaneously', cx, canvasHeight * 0.72);

@@ -76,8 +76,8 @@ export default class BlackHoleEvent {
                 const nx = -dx / dist;
                 const ny = -dy / dist;
                 Matter.Body.applyForce(body, body.position, {
-                    x: nx * 0.018,
-                    y: ny * 0.018,
+                    x: nx * 0.010,
+                    y: ny * 0.010,
                 });
             }
         }

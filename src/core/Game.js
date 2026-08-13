@@ -1,4 +1,5 @@
 import PhysicsWorld        from "../physics/PhysicsWorld";
+import { gf, GAME_FONT } from '../GameFont.js';
 import ArenaPhysics        from "../physics/ArenaPhysics";
 import ArenaRenderer       from "../render/ArenaRenderer";
 import BottomTrayRenderer  from "../render/BottomTrayRenderer";
@@ -286,6 +287,9 @@ export default class Game {
             this.sessionMode = null; // classic 40-min qualifier
         }
 
+        // Tell leaderboard renderer which label to use
+        this.leaderboardRenderer?.setHighestWinsMode(this.isHighestWinsMode);
+
         this._doReset();
     }
 
@@ -448,7 +452,7 @@ export default class Game {
         const rawW = Math.max(10, spacing * 1.05);
         const maxW = this.isFinalMode ? 22 : 32;
         this._nextFlagW = Math.min(rawW, maxW);
-        this._nextFlagH = Math.max(7, this._nextFlagW * 0.70);
+        this._nextFlagH = Math.max(7, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
         this._clearAllFlags();
 
@@ -539,7 +543,7 @@ export default class Game {
         );
         this._nextSpawnPositions = positions;
         this._nextFlagW = Math.max(10, Math.min(32, spacing * 1.05));
-        this._nextFlagH = Math.max(7, this._nextFlagW * 0.70);
+        this._nextFlagH = Math.max(7, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
         this.eventManager.pick();
         this._beginNextEvent();
@@ -560,11 +564,11 @@ export default class Game {
         this.arena.gapSize       = 0;
         // Lock gap fixed every round (never widens). Final = tiny gap for slow exits.
         if (this.isFinalMode) {
-            this.arena.initialGapSize = 2;
+            this.arena.initialGapSize = 2;  // final: slow deliberate exits
             this.arena.maxGapSize     = 2;
         } else {
-            this.arena.initialGapSize = 2;
-            this.arena.maxGapSize     = 2;
+            this.arena.initialGapSize = 3;  // qualifying: 30-40s rounds
+            this.arena.maxGapSize     = 3;
         }
         this.arena.syncWalls();
 
@@ -627,8 +631,67 @@ export default class Game {
         this.audio.playRoundStart();
         this.eventManager.start(this._eventCtx());
         if (this.isFinalMode) this._finalRoundNumber++;
-        // Reset asteroid shower clock so it never fires during countdown/next-event
-        if (this.theme?.stars) this.spaceTheme.notifyPlaying();
+
+        // Reset asteroid elimination tracking for this round
+        this._asteroidElimMsg = null;
+
+        // Wire up asteroid burn callback so flags are immediately eliminated
+        // when struck rather than just given velocity
+        if (this.theme?.stars) {
+            this.spaceTheme.onFlagBurned = (flag, x, y) => {
+                this._handleAsteroidBurn(flag, x, y);
+            };
+            // Give SpaceTheme access to audio so it can play swoosh / hit sounds
+            this.spaceTheme.audio = this.audio;
+            this.spaceTheme.notifyPlaying();
+        }
+    }
+
+    /**
+     * Immediately eliminates a flag that was incinerated by an asteroid.
+     * Called from SpaceTheme.onFlagBurned during the draw phase.
+     */
+    _handleAsteroidBurn(flag, x, y) {
+        if (!flag || !flag.body) return;
+
+        // Guard: flag might have already been eliminated (race condition)
+        const flagIdx = this.flagManager?.flags?.indexOf(flag);
+        if (flagIdx === undefined || flagIdx < 0) return;
+
+        // Remove from physics world
+        Matter.World.remove(this.physics.world, flag.body);
+
+        // Remove from live flags list
+        this.flagManager.flags.splice(flagIdx, 1);
+
+        // Record as eliminated
+        this.eliminationManager.eliminated.push(flag);
+
+        // Update asteroid elimination message tracking
+        if (!this._asteroidElimMsg) {
+            this._asteroidElimMsg = { countries: [], time: Date.now() };
+        } else {
+            // If it's been more than 8 seconds since last shower, start a fresh msg
+            if (Date.now() - this._asteroidElimMsg.time > 8000) {
+                this._asteroidElimMsg = { countries: [], time: Date.now() };
+            }
+        }
+        // Add country if not already listed for this shower
+        const alreadyListed = this._asteroidElimMsg.countries.some(
+            f => (f.country?.code ?? f.code) === flag.country?.code
+        );
+        if (!alreadyListed) {
+            this._asteroidElimMsg.countries.push(flag);
+        }
+        // Bump the timestamp so the message stays visible after each new burn
+        this._asteroidElimMsg.time = Date.now();
+
+        // Sound & milestone feedback
+        this.audio?.playElimination?.();
+        this.audio?.playMilestone?.(this.flagManager.flags.length, this.totalCountries);
+
+        // Update remaining-flag counter on arena
+        this.arena?.setRemainingFlags?.(this.flagManager.flags.length);
     }
 
     _clearAllFlags() {
@@ -1087,7 +1150,9 @@ export default class Game {
                 this.layout?.arenaY ?? this._lh / 2,
                 this.layout?.arenaRadius ?? 120,
                 Matter,
-                this.gameState
+                this.gameState,
+                this.flagManager?.flags?.length ?? 0,
+                this.totalCountries ?? 0
             );
             this._drawThemeStars(ctx);
         }
@@ -1134,7 +1199,9 @@ export default class Game {
         } else if (this.gameState !== "NEXT_EVENT") {
             this.bottomTrayRenderer.draw(
                 ctx, this.eliminationManager?.eliminated ?? [],
-                this._lw, this._lh
+                this._lw, this._lh,
+                undefined,
+                this.theme?.stars ? (this._asteroidElimMsg ?? null) : null
             );
         } else {
             this.bottomTrayRenderer.draw(ctx, [], this._lw, this._lh);
@@ -1199,7 +1266,7 @@ export default class Game {
         ctx.shadowColor  = "rgba(0,0,0,0.75)";
         ctx.shadowBlur   = 6;
         const labelSize = Math.min(this._lw * 0.030, 13);
-        ctx.font = `700 ${labelSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(700, labelSize);
 
         if (this.isFinalMode) {
             // Match reference stream branding + dedicated event name
@@ -1274,19 +1341,19 @@ export default class Game {
         ctx.shadowBlur   = 10;
 
         const titleSize = Math.min(this._lw * 0.028, 22);
-        ctx.font = `800 ${titleSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(800, titleSize);
         ctx.fillStyle = "#38D5FF";
         ctx.fillText(this.isFinalMode ? "LAST FLAG STANDING" : "NEXT BATTLE", cx, cy - cardH * 0.28);
 
         const pulse    = 1 + 0.04 * Math.sin(timer * 0.1);
         const iconSize = Math.min(this._lw * 0.08, 52) * pulse;
-        ctx.font       = `${iconSize}px system-ui, Arial, sans-serif`;
+        ctx.font       = `${iconSize}px system-ui, Apple Color Emoji, sans-serif`;
         ctx.shadowBlur = 14;
         ctx.fillText(this.isFinalMode ? "🏳️" : ev.icon, cx, cy - 4);
 
         // Event name badge strip
         const eventSize = Math.min(this._lw * 0.048, 36);
-        ctx.font = `900 ${eventSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(900, eventSize);
         ctx.fillStyle   = this.isFinalMode ? "#FFC83D" : "#F4F7FF";
         ctx.shadowColor = "rgba(61, 124, 255, 0.35)";
         ctx.shadowBlur  = 12;
@@ -1315,7 +1382,7 @@ export default class Game {
 
         // Broadcast transition label
         const labelSize = Math.min(this._lw * 0.045, 28);
-        ctx.font = `800 ${labelSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(800, labelSize);
         ctx.fillStyle   = "#38D5FF";
         ctx.shadowColor = "rgba(61, 124, 255, 0.40)";
         ctx.shadowBlur  = 10;
@@ -1336,7 +1403,7 @@ export default class Game {
         ctx.stroke();
 
         const evNameSize = Math.min(this._lw * 0.038, 20);
-        ctx.font = `700 ${evNameSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(700, evNameSize);
         ctx.fillStyle   = "#F4F7FF";
         ctx.shadowBlur  = 0;
         ctx.fillText(
@@ -1348,7 +1415,7 @@ export default class Game {
 
         // Flag count metadata
         const countSize = Math.min(this._lw * 0.032, 18);
-        ctx.font = `600 ${countSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(600, countSize);
         ctx.fillStyle   = "#91A7C9";
         ctx.shadowColor = "rgba(0,0,0,0.8)";
         ctx.shadowBlur  = 6;
@@ -1380,7 +1447,7 @@ export default class Game {
         ctx.lineWidth   = 1.5;
         ctx.stroke();
 
-        ctx.font = `900 ${numSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(900, numSize);
         ctx.fillStyle   = "#F4F7FF";
         ctx.shadowColor = "rgba(0,0,0,0.85)";
         ctx.shadowBlur  = 16;
@@ -1450,7 +1517,7 @@ export default class Game {
         //   N FLAGS LEFT
         const elimSize = Math.min(R * 0.12, 26);
         const flagH    = Math.min(R * 0.28, 80);
-        const flagW    = Math.round(flagH * 1.55);
+        const flagW    = Math.round(flagH * 1.5);  // standard 3:2 flag ratio
         const nameSize = Math.min(R * 0.10, 20);
         const remSize  = Math.min(R * 0.07, 15);
         const gap1     = Math.max(12, R * 0.05);  // ELIMINATED → flag
@@ -1461,7 +1528,7 @@ export default class Game {
         let y = cy - totalH / 2;
 
         // ELIMINATED
-        ctx.font      = `900 ${elimSize}px system-ui, Arial, sans-serif`;
+        ctx.font      = gf(900, elimSize);
         ctx.fillStyle = "#FF5368";
         ctx.fillText("ELIMINATED", cx, y);
         y += elimSize + gap1;
@@ -1508,7 +1575,7 @@ export default class Game {
         y += flagH + gap2;
 
         // Country name — clearly BELOW the flag
-        ctx.font      = `800 ${nameSize}px system-ui, Arial, sans-serif`;
+        ctx.font      = gf(800, nameSize);
         ctx.fillStyle = "#F4F7FF";
         ctx.shadowBlur = 10;
         let name = (item.country?.name ?? "").toUpperCase();
@@ -1519,7 +1586,7 @@ export default class Game {
         y += nameSize + gap3;
 
         // Remaining count — below country name
-        ctx.font      = `700 ${remSize}px system-ui, Arial, sans-serif`;
+        ctx.font      = gf(700, remSize);
         ctx.fillStyle = "#FFC83D";
         ctx.shadowBlur = 8;
         const left = item.remaining;
@@ -1570,12 +1637,12 @@ export default class Game {
         ctx.globalAlpha = alpha;
 
         const titleSize = Math.min(R * 0.11, 24);
-        ctx.font = `900 ${titleSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(900, titleSize);
         ctx.fillStyle = "#F4F7FF";
         ctx.fillText("LAST FLAG STANDING", cx, cy - titleSize * 0.35);
 
         const subSize = Math.min(R * 0.075, 16);
-        ctx.font = `700 ${subSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(700, subSize);
         ctx.fillStyle = "#FFC83D";
         ctx.shadowBlur = 8;
         ctx.fillText(
@@ -1645,7 +1712,7 @@ export default class Game {
         ctx.fill();
 
         const elimSize = Math.min(cardW * 0.082, 20);
-        ctx.font = `900 ${elimSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(900, elimSize);
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
         ctx.fillStyle    = "#F4F7FF";
@@ -1680,7 +1747,7 @@ export default class Game {
         const nameX    = flagX + flagW + 16;
         const maxNameW = cardX + cardW - nameX - 10;
         const nameSize = Math.min(cardW * 0.088, 19);
-        ctx.font = `800 ${nameSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(800, nameSize);
         ctx.textAlign    = "left";
         ctx.textBaseline = "middle";
         ctx.fillStyle    = "#FFFFFF";
@@ -1694,7 +1761,7 @@ export default class Game {
         const remCount = this._finalists.length;
         const remText  = `${remCount} ${remCount === 1 ? "country" : "countries"} remaining`;
         const remSize  = Math.min(cardW * 0.060, 13);
-        ctx.font = `600 ${remSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(600, remSize);
         ctx.fillStyle = "rgba(255,180,180,0.85)";
         ctx.shadowBlur = 5;
         ctx.fillText(remText, nameX, bodyTop + bodyH / 2 + nameSize * 1.5);
@@ -1764,7 +1831,7 @@ export default class Game {
         ctx.shadowColor = "rgba(0,0,0,0.85)";
         ctx.shadowBlur = 10;
         const topSize = Math.min(R * 0.085, 17);
-        ctx.font = `800 ${topSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(800, topSize);
         ctx.fillStyle = "#FFC83D";
         ctx.fillText(`TOP 1  ·  ${name || "CHAMPION"}`, ax, ay - R - topSize * 2.2);
 
@@ -1778,7 +1845,7 @@ export default class Game {
         const trophySize = Math.min(R * 0.15, 34);
         const titleSize  = Math.min(R * 0.09, 18);
         const flagH      = Math.min(R * 0.32, 90);
-        const flagW      = Math.round(flagH * 1.55);
+        const flagW      = Math.round(flagH * 1.5);  // standard 3:2 flag ratio
         const nameSize   = Math.min(R * 0.11, 24);
         const winSize    = Math.min(R * 0.075, 15);
         const cdSize     = Math.min(R * 0.06, 12);
@@ -1795,7 +1862,7 @@ export default class Game {
         let y = ay - stackH / 2;
 
         // Trophy emoji
-        ctx.font = `900 ${trophySize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(900, trophySize);
         ctx.fillStyle = "#FFC83D";
         ctx.shadowColor = "rgba(255, 200, 61, 0.55)";
         ctx.shadowBlur = 16 + pulse * 8;
@@ -1803,7 +1870,7 @@ export default class Game {
         y += trophySize + gap * 0.5;
 
         // TIME UP — CHAMPION
-        ctx.font = `900 ${titleSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(900, titleSize);
         ctx.fillStyle = "#FFC83D";
         ctx.shadowBlur = 12;
         ctx.fillText("TIME UP  —  CHAMPION", ax, y);
@@ -1846,7 +1913,7 @@ export default class Game {
         y += flagH + gap;
 
         // Country name — clearly below the flag
-        ctx.font = `800 ${nameSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(800, nameSize);
         ctx.fillStyle = "#F4F7FF";
         ctx.shadowColor = "rgba(0,0,0,0.9)";
         ctx.shadowBlur = 12;
@@ -1858,7 +1925,7 @@ export default class Game {
         y += nameSize + gap * 0.75;
 
         // 1 WIN
-        ctx.font = `800 ${winSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(800, winSize);
         ctx.fillStyle = "#FFC83D";
         ctx.shadowBlur = 10;
         ctx.fillText("1 WIN", ax, y);
@@ -1868,7 +1935,7 @@ export default class Game {
         const mins  = Math.floor(this._champCountdownRemain / 60);
         const secs  = this._champCountdownRemain % 60;
         const cdStr = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-        ctx.font = `700 ${cdSize}px system-ui, Arial, sans-serif`;
+        ctx.font = gf(700, cdSize);
         ctx.fillStyle = "#91A7C9";
         ctx.shadowBlur = 6;
         ctx.fillText(`NEXT TOURNAMENT IN  ${cdStr}`, ax, y);

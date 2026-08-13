@@ -1,5 +1,6 @@
 import './style.css';
 import Game from './core/Game';
+import HighestWinsMode from './modes/HighestWinsMode.js';
 import { THEME_LIST, DEFAULT_THEME } from './themes/ThemeConfig.js';
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
@@ -271,6 +272,42 @@ document.addEventListener('keydown', function (e) {
         }
         game.sessionStartTime = Date.now() - game.QUALIFY_DURATION_MS - 1;
         console.log('[DEBUG] Shift+F — Final Mode will trigger on next winner.');
+    }
+
+    // Shift+C — instantly trigger Grand Champion screen (test what it looks like)
+    // Works in both Qualifier and Highest Winner Wins mode.
+    if (e.key === 'C' || e.key === 'c') {
+        if (game.gameState !== 'PLAYING' && game.gameState !== 'COUNTDOWN') {
+            console.warn('[DEBUG] Shift+C ignored — game is not running.');
+            return;
+        }
+        // Pick the current leader from the leaderboard, or a random country as placeholder
+        const lb = game.winnerManager.getLeaderboard();
+        const topEntry = lb[0] ?? null;
+        const country = topEntry
+            ? { code: topEntry.code, name: topEntry.name, image: topEntry.image }
+            : (game.activeCountries?.[0] ?? game.allCountries?.[0] ?? { name: 'TEST CHAMPION', image: null });
+
+        // Inject a fake win record so it shows a win count on the champion screen
+        if (topEntry && !game.winnerManager._wins[topEntry.code]) {
+            game.winnerManager._wins[topEntry.code] = { name: topEntry.name, imageSrc: null, wins: 1 };
+        }
+
+        console.log('[DEBUG] Shift+C — Triggering Grand Champion for:', country.name);
+        game._triggerGrandChampion(country);
+    }
+
+    // Shift+H — trigger Highest Wins champion end (for testing HighestWinsMode champion screen)
+    if (e.key === 'H' || e.key === 'h') {
+        if (!game.isHighestWinsMode) {
+            console.warn('[DEBUG] Shift+H only works in Highest Winner Wins mode.');
+            return;
+        }
+        // Force time to be up and trigger the champion declaration
+        if (game.sessionMode) {
+            game.sessionMode.sessionStartTime = Date.now() - HighestWinsMode.DURATION_MS - 1000;
+            console.log('[DEBUG] Shift+H — Highest Wins time forced to end, champion on next win.');
+        }
     }
 });
 

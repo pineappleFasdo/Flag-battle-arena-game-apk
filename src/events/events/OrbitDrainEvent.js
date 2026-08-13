@@ -17,7 +17,7 @@ export default class OrbitDrainEvent {
     _direction      = 1;
 
     // Tuned to match video: visible gap + continuous stream exits
-    static GAP = 3;
+    static GAP = 2;
 
     start({ arena, flagManager }) {
         if (arena) {
@@ -26,7 +26,7 @@ export default class OrbitDrainEvent {
             this._origMaxGap     = arena.maxGapSize ?? 3;
 
             const g = OrbitDrainEvent.GAP;
-            arena.rotationSpeed  = 0.018;
+            arena.rotationSpeed  = 0.014;
             arena.initialGapSize = g;
             arena.maxGapSize     = g;
             if (arena.state === "PLAYING") {
@@ -67,7 +67,7 @@ export default class OrbitDrainEvent {
         this._frame++;
         const g = OrbitDrainEvent.GAP;
 
-        arena.rotationSpeed = 0.018;
+        arena.rotationSpeed = 0.014;
         if (arena.gapSize > 0) {
             arena.gapSize = g;
             arena.initialGapSize = g;
@@ -142,8 +142,8 @@ export default class OrbitDrainEvent {
             // Eject through gap when aligned
             if (Math.abs(diff) < gapHalf * 1.25 && dist > R * 0.68) {
                 Matter.Body.applyForce(body, body.position, {
-                    x: nx * 0.0016,
-                    y: ny * 0.0016,
+                    x: nx * 0.0010,
+                    y: ny * 0.0010,
                 });
             }
 

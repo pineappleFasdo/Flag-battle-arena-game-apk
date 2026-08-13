@@ -15,7 +15,7 @@ export default class Flag {
                 label       : "flag",
                 restitution : 0.6,
                 friction    : 0.005,
-                frictionAir : 0.012,
+                frictionAir : 0.020,
                 density     : 0.0012,
                 chamfer     : { radius: Math.max(1, width * 0.06) },
                 sleepThreshold: 80,
@@ -24,7 +24,7 @@ export default class Flag {
 
         Matter.World.add(world, this.body);
 
-        const speed = Math.max(1.8, this.width * 0.18);
+        const speed = Math.max(1.2, this.width * 0.12);
         const angle = Math.random() * Math.PI * 2;
 
         Matter.Body.setVelocity(this.body, {

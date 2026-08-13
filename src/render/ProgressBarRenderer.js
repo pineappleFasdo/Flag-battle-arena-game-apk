@@ -1,3 +1,4 @@
+import { gf, GAME_FONT } from '../GameFont.js';
 export default class ProgressBarRenderer {
 
     draw(ctx, eliminatedFlags, total, centerX, y, width, barHeight = 18) {
@@ -44,7 +45,7 @@ export default class ProgressBarRenderer {
         // Centre text
         const textSize = Math.max(9, Math.round(barHeight * 0.58));
         ctx.fillStyle    = '#F4F7FF';
-        ctx.font         = `700 ${textSize}px system-ui, Arial, sans-serif`;
+        ctx.font         = gf(700, textSize);
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
         ctx.shadowColor  = 'rgba(0,0,0,0.55)';
@@ -81,7 +82,7 @@ export default class ProgressBarRenderer {
         // Broadcast-style caption
         ctx.save();
         ctx.fillStyle    = '#38D5FF';
-        ctx.font         = `700 ${Math.max(9, Math.round(barHeight * 0.55))}px system-ui, Arial, sans-serif`;
+        ctx.font         = gf(700, Math.max(9, Math.round(barHeight * 0.55)));
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'top';
         ctx.fillText('ELIMINATED', centerX, barY + barHeight + 4);

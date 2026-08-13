@@ -200,12 +200,16 @@ export default class AudioManager {
     }
 
     playElimination() {
+        // Soothing soft chime — gentle descending sine tones, no harsh square waves
         const ctx = this._resume();
         if (!ctx) return;
         const t = ctx.currentTime;
-        this._tone(850, t,        0.035, 0.28, 'square',   0.030);
-        this._tone(450, t + 0.01, 0.030, 0.12, 'triangle', 0.025);
-        this._noise(t, 0.020, 0.05, 3500);
+        // Soft bell-like chime: mid-range sine, gentle fade
+        this._tone(660, t,        0.18, 0.12, 'sine', 0.15);
+        this._tone(495, t + 0.08, 0.22, 0.09, 'sine', 0.18);
+        this._tone(392, t + 0.16, 0.28, 0.07, 'sine', 0.24);
+        // Very soft high shimmer
+        this._tone(1320, t, 0.05, 0.04, 'sine', 0.04);
     }
 
     playRoundStart() {
@@ -266,6 +270,77 @@ export default class AudioManager {
         this._tone(1200, t, 0.08, 0.08, 'sine', 0.06);
         this._tone(1800, t + 0.04, 0.10, 0.06, 'sine', 0.07);
         this._tone(2400, t + 0.08, 0.12, 0.05, 'triangle', 0.08);
+    }
+
+    /**
+     * Swoosh sound — played once when an asteroid shower begins entering the arena.
+     * Deep whooshing noise with a descending pitch sweep: sounds like something
+     * massive hurtling through space at high velocity.
+     */
+    playAsteroidSwoosh() {
+        const ctx = this._resume();
+        if (!ctx) return;
+        const t = ctx.currentTime;
+
+        // Layer 1 — deep resonant whoosh (falling pitch)
+        const osc1 = ctx.createOscillator();
+        const g1   = ctx.createGain();
+        osc1.type  = 'sawtooth';
+        osc1.frequency.setValueAtTime(320, t);
+        osc1.frequency.exponentialRampToValueAtTime(55, t + 0.9);
+        g1.gain.setValueAtTime(0, t);
+        g1.gain.linearRampToValueAtTime(0.28, t + 0.08);
+        g1.gain.exponentialRampToValueAtTime(0.001, t + 0.95);
+        osc1.connect(g1); g1.connect(this._masterGain);
+        osc1.start(t); osc1.stop(t + 0.95);
+
+        // Layer 2 — airy high noise rush
+        this._noise(t,        0.50, 0.22, 5500);
+        this._noise(t + 0.05, 0.65, 0.14, 3200);
+
+        // Layer 3 — sub rumble (very low sine)
+        const osc2 = ctx.createOscillator();
+        const g2   = ctx.createGain();
+        osc2.type  = 'sine';
+        osc2.frequency.setValueAtTime(90, t);
+        osc2.frequency.exponentialRampToValueAtTime(28, t + 0.85);
+        g2.gain.setValueAtTime(0, t);
+        g2.gain.linearRampToValueAtTime(0.32, t + 0.12);
+        g2.gain.exponentialRampToValueAtTime(0.001, t + 0.90);
+        osc2.connect(g2); g2.connect(this._masterGain);
+        osc2.start(t); osc2.stop(t + 0.90);
+    }
+
+    /**
+     * Impact sound — played when an asteroid hits and burns a flag.
+     * Sharp crack + bass thud + high-end sizzle: sounds like a meteor strike.
+     */
+    playAsteroidHit() {
+        const ctx = this._resume();
+        if (!ctx) return;
+        const t = ctx.currentTime;
+
+        // Sharp transient crack (high noise burst)
+        this._noise(t,        0.06, 0.45, 8000);
+        this._noise(t + 0.02, 0.12, 0.30, 4000);
+
+        // Deep impact thud — low sine punch
+        const osc = ctx.createOscillator();
+        const g   = ctx.createGain();
+        osc.type  = 'sine';
+        osc.frequency.setValueAtTime(180, t);
+        osc.frequency.exponentialRampToValueAtTime(32, t + 0.30);
+        g.gain.setValueAtTime(0.55, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.32);
+        osc.connect(g); g.connect(this._masterGain);
+        osc.start(t); osc.stop(t + 0.32);
+
+        // Sizzling debris tail (mid noise decay)
+        this._noise(t + 0.04, 0.35, 0.18, 2200);
+
+        // Metallic ring — short sine at mid freq
+        this._tone(420, t + 0.01, 0.18, 0.12, 'sine', 0.15);
+        this._tone(210, t + 0.02, 0.22, 0.08, 'triangle', 0.18);
     }
 
     playMilestone(remaining, total) {

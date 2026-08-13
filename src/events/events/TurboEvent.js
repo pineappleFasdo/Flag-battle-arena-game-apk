@@ -12,16 +12,16 @@ export default class TurboEvent {
         this._origInitialGap  = arena.initialGapSize;
         this._origMaxGap      = arena.maxGapSize;
         arena._turboActive    = true;
-        arena.rotationSpeed   = 0.068;
-        // Keep gap small even in turbo — do not widen
-        arena.gapSize         = Math.min(arena.gapSize || 3, 3);
+        arena.rotationSpeed   = 0.050;
+        // Keep gap controlled in turbo
+        arena.gapSize         = Math.min(arena.gapSize || 4, 4);  // turbo: slightly wider gap
     }
 
     update({ arena }) {
         if (arena.state === "PLAYING") {
-            arena.rotationSpeed = 0.068;
-            // Hold fixed small gap
-            if (arena.gapSize > 3) arena.gapSize = 3;
+            arena.rotationSpeed = 0.050;
+            // Hold fixed gap
+            if (arena.gapSize > 4) arena.gapSize = 4;  // turbo: slightly wider gap
         }
     }
 

@@ -1,11 +1,13 @@
-// LeaderboardRenderer.js
-// Professional sports scoreboard — LAST FLAG STANDING
-// Palette: panels #101D38, rows #172B50, rank muted blue, names ice white, wins gold
+// LeaderboardRenderer.js — Pro Esports Broadcast Scoreboard
+import { gf } from '../GameFont.js';
+// Design: dark glassmorphism panel, metallic rank badges, gold medal tiers,
+// animated win counters, shimmer effects, team-style flag + name layout.
 
 export default class LeaderboardRenderer {
 
     constructor() {
-        this._isFinalMode  = false;
+        this._isFinalMode       = false;
+        this._isHighestWinsMode = false;
         this._allRows      = [];
         this._bumps        = new Map();
         this._newRows      = new Set();
@@ -17,14 +19,15 @@ export default class LeaderboardRenderer {
 
         this._fading     = false;
         this._fadeStart  = 0;
-        this._fadeDur    = 500;
+        this._fadeDur    = 400;
         this._fromPage   = 0;
         this._toPage     = 0;
 
         this._staggerStart = 0;
-        this._staggerDur   = 80;
+        this._truncCache   = new Map();
 
-        this._truncCache = new Map();
+        // Subtle panel pulse animation
+        this._pulsePhase = 0;
     }
 
     reset() {
@@ -39,18 +42,21 @@ export default class LeaderboardRenderer {
     }
 
     setFinalMode(enabled) {
-        this._isFinalMode = enabled;
+        this._isFinalMode = !!enabled;
+    }
+
+    setHighestWinsMode(enabled) {
+        this._isHighestWinsMode = !!enabled;
     }
 
     markDirty(rows, winCode) {
         if (winCode) {
             const existing = this._allRows.find(r => r.code === winCode);
-            if (!existing) {
-                this._newRows.add(winCode);
-            }
+            if (!existing) this._newRows.add(winCode);
+
             this._bumps.set(winCode, {
                 startTime : performance.now(),
-                duration  : 900,
+                duration  : 800,
                 toValue   : rows.find(r => r.code === winCode)?.wins ?? 1,
             });
 
@@ -70,19 +76,21 @@ export default class LeaderboardRenderer {
     }
 
     draw(ctx, rows, x, y, w, rowH = 28) {
-        this._shimmerPhase = (performance.now() / 1400) % 1;
         const now = performance.now();
-        const n   = 5;
+        this._shimmerPhase = (now / 1600) % 1;
+        this._pulsePhase   = (now / 2200) % 1;
+        const n = 5;
 
         if (this._allRows.length === 0 && rows.length > 0) {
             this._allRows   = rows;
             this._pageTotal = Math.max(1, Math.ceil(rows.length / n));
         }
 
+        // Auto page-flip every 5.5 seconds
         if (!this._fading && this._pageTotal > 1) {
             if (this._lastPageSwitch === 0) {
                 this._lastPageSwitch = now;
-            } else if (now - this._lastPageSwitch > 6000) {
+            } else if (now - this._lastPageSwitch > 5500) {
                 const next = (this._pageIndex + 1) % this._pageTotal;
                 this._startFade(this._pageIndex, next, now);
             }
@@ -101,64 +109,93 @@ export default class LeaderboardRenderer {
             }
         }
 
-        const headerH = Math.round(rowH * 0.75);
+        const headerH = Math.round(rowH * 0.85);
         const totalH  = headerH + n * rowH;
-        const padL    = Math.round(rowH * 0.30);
-        const padR    = Math.round(rowH * 0.30);
-        const flagW   = Math.round(rowH * 1.60);
-        const flagH   = Math.round(rowH * 0.74);
-        const rankW   = Math.round(rowH * 1.15);
-        const fSize   = Math.max(10, Math.round(rowH * 0.44));
-        const winsW   = Math.round(w * 0.22);
-        const radius  = 10;
+        const radius  = 12;
+
+        // ── Sizes ─────────────────────────────────────────────────────────────
+        const padL   = Math.round(rowH * 0.25);
+        const padR   = Math.round(rowH * 0.28);
+        const flagH  = Math.round(rowH * 0.70);
+        const flagW  = Math.round(flagH * 1.5);  // standard 3:2 flag ratio
+        const rankW  = Math.round(rowH * 1.10);
+        const fSize  = Math.max(9, Math.round(rowH * 0.42));
+        const winsW  = Math.round(w * 0.28);
 
         ctx.save();
 
-        // Panel background — #101D38
-        ctx.fillStyle = '#101D38';
+        // ── Outer glow (subtle pulse) ─────────────────────────────────────────
+        const pulse = 0.5 + 0.5 * Math.sin(this._pulsePhase * Math.PI * 2);
+        ctx.shadowColor = `rgba(61, 124, 255, ${0.20 + 0.10 * pulse})`;
+        ctx.shadowBlur  = 16 + 6 * pulse;
+        this._rrect(ctx, x - 1, y - 1, w + 2, totalH + 2, radius + 1);
+        ctx.strokeStyle = `rgba(61, 124, 255, ${0.55 + 0.15 * pulse})`;
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+        ctx.shadowBlur  = 0;
+
+        // ── Panel body — deep navy with subtle gradient ───────────────────────
+        const panelGrad = ctx.createLinearGradient(x, y, x, y + totalH);
+        panelGrad.addColorStop(0,   '#0D1929');
+        panelGrad.addColorStop(0.15, '#101D38');
+        panelGrad.addColorStop(1,   '#080F1E');
+        ctx.fillStyle = panelGrad;
         this._rrect(ctx, x, y, w, totalH, radius);
         ctx.fill();
 
-        // Thin professional electric-blue border (reduced glow)
-        ctx.shadowColor = 'rgba(61, 124, 255, 0.35)';
-        ctx.shadowBlur  = 8;
-        ctx.strokeStyle = '#2E62E8';
-        ctx.lineWidth   = 1.5;
-        this._rrect(ctx, x, y, w, totalH, radius);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+        // ── Subtle top highlight strip ────────────────────────────────────────
+        const highlightGrad = ctx.createLinearGradient(x, y, x + w, y);
+        highlightGrad.addColorStop(0,    'rgba(255,255,255,0)');
+        highlightGrad.addColorStop(0.35, 'rgba(255,255,255,0.04)');
+        highlightGrad.addColorStop(0.65, 'rgba(255,255,255,0.04)');
+        highlightGrad.addColorStop(1,    'rgba(255,255,255,0)');
+        ctx.fillStyle = highlightGrad;
+        this._rrect(ctx, x, y, w, 3, [radius, radius, 0, 0]);
+        ctx.fill();
 
-        // Header band
-        const hg = ctx.createLinearGradient(x, y, x, y + headerH);
-        hg.addColorStop(0, '#203B68');
-        hg.addColorStop(1, '#101D38');
+        // ── Header ────────────────────────────────────────────────────────────
+        const hg = ctx.createLinearGradient(x, y, x + w, y + headerH);
+        hg.addColorStop(0,   '#1A3060');
+        hg.addColorStop(0.5, '#1E3D78');
+        hg.addColorStop(1,   '#142548');
         ctx.fillStyle = hg;
         this._rrect(ctx, x, y, w, headerH, [radius, radius, 0, 0]);
         ctx.fill();
 
-        // Header separator
-        ctx.strokeStyle = 'rgba(46, 98, 232, 0.45)';
-        ctx.lineWidth   = 0.8;
+        // Header accent line at bottom
+        const accentGrad = ctx.createLinearGradient(x, 0, x + w, 0);
+        accentGrad.addColorStop(0,    'rgba(61,124,255,0)');
+        accentGrad.addColorStop(0.3,  'rgba(61,124,255,0.8)');
+        accentGrad.addColorStop(0.7,  'rgba(56,213,255,0.8)');
+        accentGrad.addColorStop(1,    'rgba(61,124,255,0)');
+        ctx.strokeStyle = accentGrad;
+        ctx.lineWidth   = 1.5;
         ctx.beginPath();
-        ctx.moveTo(x + 10, y + headerH);
-        ctx.lineTo(x + w - 10, y + headerH);
+        ctx.moveTo(x + 12, y + headerH);
+        ctx.lineTo(x + w - 12, y + headerH);
         ctx.stroke();
 
-        // Header text — uppercase broadcast label
-        const hFontSize = Math.max(9, Math.round(headerH * 0.50));
-        ctx.fillStyle    = '#F4F7FF';
-        ctx.font         = `800 ${hFontSize}px system-ui, Arial, sans-serif`;
+        // Header icon + label
+        const hFontSize = Math.max(8, Math.round(headerH * 0.44));
+        const label = this._isFinalMode
+            ? '⚔️  LAST FLAG STANDING'
+            : this._isHighestWinsMode
+                ? '🏆  LEADERBOARD'
+                : '🏅  QUALIFIED FOR FINAL';
+
+        ctx.fillStyle    = '#FFFFFF';
+        ctx.font         = gf(700, hFontSize);
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(
-            this._isFinalMode ? 'LAST FLAG STANDING' : 'QUALIFIED FOR FINAL',
-            x + w / 2, y + headerH / 2
-        );
+        ctx.shadowColor  = 'rgba(61,124,255,0.5)';
+        ctx.shadowBlur   = 8;
+        ctx.fillText(label, x + w / 2, y + headerH / 2);
+        ctx.shadowBlur = 0;
 
+        // ── Row area ──────────────────────────────────────────────────────────
         const rowsY = y + headerH;
         const rowsH = n * rowH;
 
-        // Clip row area with bottom corners rounded so last row doesn't square them off
         ctx.save();
         this._rrect(ctx, x, rowsY, w, rowsH, [0, 0, radius, radius]);
         ctx.clip();
@@ -167,46 +204,51 @@ export default class LeaderboardRenderer {
             ctx.save();
             ctx.globalAlpha = 1 - fadeT;
             this._drawPage(ctx, this._fromPage, x, rowsY, w, rowH, n,
-                padL, padR, flagW, flagH, rankW, fSize, winsW, 1, now);
+                padL, padR, flagW, flagH, rankW, fSize, winsW, 99999, now);
             ctx.restore();
 
             ctx.save();
             ctx.globalAlpha = fadeT;
             this._drawPage(ctx, this._toPage, x, rowsY, w, rowH, n,
-                padL, padR, flagW, flagH, rankW, fSize, winsW, 1, now);
+                padL, padR, flagW, flagH, rankW, fSize, winsW, 99999, now);
             ctx.restore();
         } else {
             const staggerElapsed = now - this._staggerStart;
             this._drawPage(ctx, this._pageIndex, x, rowsY, w, rowH, n,
-                padL, padR, flagW, flagH, rankW, fSize, winsW,
-                staggerElapsed, now);
+                padL, padR, flagW, flagH, rankW, fSize, winsW, staggerElapsed, now);
         }
 
         ctx.restore();
 
-        // Page indicator dots
-        if (this._pageTotal > 1 && this._pageTotal <= 15) {
-            const dotR   = Math.max(2.5, Math.round(rowH * 0.10));
-            const dotGap = dotR * 2.8;
+        // ── Page indicator dots ───────────────────────────────────────────────
+        if (this._pageTotal > 1 && this._pageTotal <= 20) {
+            const dotR   = Math.max(2, Math.round(rowH * 0.09));
+            const dotGap = dotR * 2.6;
             const totalDotsW = (this._pageTotal - 1) * dotGap + dotR * 2;
             let dotX = x + (w - totalDotsW) / 2;
-            const dotY = rowsY + rowsH - dotR - 4;
+            const dotY = rowsY + rowsH - dotR * 2 - 3;
 
             for (let p = 0; p < this._pageTotal; p++) {
                 const active = p === (this._fading ? this._toPage : this._pageIndex);
                 ctx.beginPath();
-                ctx.arc(dotX + dotR, dotY, active ? dotR * 1.3 : dotR, 0, Math.PI * 2);
-                ctx.fillStyle = active
-                    ? '#3D7CFF'
-                    : 'rgba(61, 124, 255, 0.28)';
+                ctx.arc(dotX + dotR, dotY, active ? dotR * 1.4 : dotR, 0, Math.PI * 2);
+                if (active) {
+                    ctx.fillStyle = '#38D5FF';
+                    ctx.shadowColor = 'rgba(56,213,255,0.6)';
+                    ctx.shadowBlur  = 6;
+                } else {
+                    ctx.fillStyle = 'rgba(61,124,255,0.25)';
+                    ctx.shadowBlur = 0;
+                }
                 ctx.fill();
+                ctx.shadowBlur = 0;
                 dotX += dotGap;
             }
         }
 
-        // Re-stroke full panel so bottom corners stay clean & rounded
-        ctx.strokeStyle = '#2E62E8';
-        ctx.lineWidth   = 1.5;
+        // ── Final outer border stroke ─────────────────────────────────────────
+        ctx.strokeStyle = `rgba(61,124,255,${0.35 + 0.15 * pulse})`;
+        ctx.lineWidth   = 1;
         this._rrect(ctx, x, y, w, totalH, radius);
         ctx.stroke();
 
@@ -216,16 +258,14 @@ export default class LeaderboardRenderer {
     _drawPage(ctx, pageIdx, x, rowsY, w, rowH, n,
               padL, padR, flagW, flagH, rankW, fSize, winsW,
               staggerElapsed, now) {
-
         const start = pageIdx * n;
         for (let i = 0; i < n; i++) {
             const globalRank = start + i;
             const entry      = this._allRows[globalRank] ?? null;
-
-            const rowStaggerMs = i * 80;
+            const rowStaggerMs = i * 70;
             const rowAlpha = staggerElapsed >= 99999
                 ? 1
-                : Math.min(1, Math.max(0, (staggerElapsed - rowStaggerMs) / 160));
+                : Math.min(1, Math.max(0, (staggerElapsed - rowStaggerMs) / 150));
 
             ctx.save();
             ctx.globalAlpha *= rowAlpha;
@@ -240,19 +280,19 @@ export default class LeaderboardRenderer {
 
         const midY = ry + rowH / 2;
 
-        // Alternating rows — #172B50 / transparent
-        ctx.fillStyle = (globalRank % 2 === 0)
-            ? '#172B50'
-            : 'rgba(0,0,0,0)';
-        ctx.fillRect(x, ry, w, rowH);
+        // ── Row background — alternating subtle bands ──────────────────────
+        if (globalRank % 2 === 0) {
+            ctx.fillStyle = 'rgba(255,255,255,0.03)';
+            ctx.fillRect(x, ry, w, rowH);
+        }
 
-        // New-winner gold flash
+        // ── Gold flash for new entry ───────────────────────────────────────
         if (entry && this._newRows.has(entry.code)) {
             const bump = this._bumps.get(entry.code);
             if (bump) {
                 const t = Math.min(1, (now - bump.startTime) / bump.duration);
                 if (t < 1) {
-                    const flashAlpha = Math.max(0, 0.18 * (1 - t));
+                    const flashAlpha = Math.max(0, 0.22 * Math.sin(Math.PI * (1 - t)));
                     ctx.fillStyle = `rgba(255, 200, 61, ${flashAlpha})`;
                     ctx.fillRect(x, ry, w, rowH);
                 } else {
@@ -261,38 +301,78 @@ export default class LeaderboardRenderer {
             }
         }
 
-        // Rank — muted blue
-        const rankLabel = `#${globalRank + 1}`;
-        ctx.fillStyle    = '#91A7C9';
-        ctx.font         = `600 ${fSize}px system-ui, Arial, sans-serif`;
-        ctx.textAlign    = 'right';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(rankLabel, x + padL + rankW, midY);
+        // ── Rank badge ────────────────────────────────────────────────────
+        const rankLabel = globalRank + 1;
+        const badgeX = x + padL;
+        const badgeY = ry + (rowH - rowH * 0.62) / 2;
+        const badgeW = rankW - 4;
+        const badgeH = rowH * 0.62;
 
-        const flagX = x + padL + rankW + 7;
+        // Medal colors for top 3
+        let badgeBg, badgeTextColor, badgeBorder;
+        if (rankLabel === 1) {
+            badgeBg        = 'rgba(255,200,61,0.18)';
+            badgeTextColor = '#FFD700';
+            badgeBorder    = 'rgba(255,200,61,0.55)';
+        } else if (rankLabel === 2) {
+            badgeBg        = 'rgba(192,192,192,0.15)';
+            badgeTextColor = '#C0C8D8';
+            badgeBorder    = 'rgba(192,192,192,0.40)';
+        } else if (rankLabel === 3) {
+            badgeBg        = 'rgba(205,127,50,0.15)';
+            badgeTextColor = '#CD9B6E';
+            badgeBorder    = 'rgba(205,127,50,0.40)';
+        } else {
+            badgeBg        = 'rgba(61,124,255,0.10)';
+            badgeTextColor = '#6A88B8';
+            badgeBorder    = 'rgba(61,124,255,0.20)';
+        }
+
+        ctx.fillStyle = badgeBg;
+        this._rrect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
+        ctx.fill();
+        ctx.strokeStyle = badgeBorder;
+        ctx.lineWidth   = 0.8;
+        this._rrect(ctx, badgeX, badgeY, badgeW, badgeH, 4);
+        ctx.stroke();
+
+        ctx.fillStyle    = badgeTextColor;
+        ctx.font         = gf(700, Math.max(8, Math.round(fSize * 0.88)));
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`#${rankLabel}`, badgeX + badgeW / 2, midY);
+
+        // ── Flag ──────────────────────────────────────────────────────────
+        const flagX = x + padL + rankW + 5;
         const flagY = ry + (rowH - flagH) / 2;
 
         if (!entry) {
+            // Empty row placeholder
             ctx.save();
             this._rrect(ctx, flagX, flagY, flagW, flagH, 2);
-            ctx.fillStyle = 'rgba(23, 43, 80, 0.7)';
+            ctx.fillStyle = 'rgba(255,255,255,0.04)';
             ctx.fill();
+            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
             ctx.restore();
-            ctx.fillStyle = 'rgba(145, 167, 201, 0.35)';
-            ctx.font      = `${fSize}px system-ui, Arial, sans-serif`;
+            ctx.fillStyle = 'rgba(100,130,180,0.30)';
+            ctx.font      = gf(400, fSize);
             ctx.textAlign = 'left';
             ctx.fillText('—', flagX + flagW + 8, midY);
-            if (rowI < n - 1) this._divider(ctx, x, ry, w, rowH, padL, padR);
+            if (rowI < n - 1) this._divider(ctx, x, ry, w, rowH);
             return;
         }
 
-        this._drawFlag(ctx, entry.image, flagX, flagY, flagW, flagH);
+        this._drawFlag(ctx, entry.image, flagX, flagY, flagW, flagH, globalRank);
 
-        // Country name — ice white
+        // ── Country name ──────────────────────────────────────────────────
         const nameX    = flagX + flagW + 8;
         const nameMaxW = w - (nameX - x) - winsW - padR - 4;
-        const nameFont = `600 ${fSize}px system-ui, Arial, sans-serif`;
-        ctx.fillStyle    = '#F4F7FF';
+        const nameFont = gf(600, fSize);
+
+        // Top 3 get slightly brighter names
+        ctx.fillStyle    = rankLabel <= 3 ? '#FFFFFF' : '#D0DCF0';
         ctx.font         = nameFont;
         ctx.textAlign    = 'left';
         ctx.textBaseline = 'middle';
@@ -301,56 +381,58 @@ export default class LeaderboardRenderer {
             nameX, midY
         );
 
-        this._drawWins(ctx, entry, x + w - padR, midY, fSize, now);
+        // ── Win counter ───────────────────────────────────────────────────
+        this._drawWins(ctx, entry, globalRank, x + w - padR, midY, fSize, now);
 
-        if (rowI < n - 1) this._divider(ctx, x, ry, w, rowH, padL, padR);
+        if (rowI < n - 1) this._divider(ctx, x, ry, w, rowH);
     }
 
-    _drawWins(ctx, entry, rightEdge, midY, fSize, now) {
+    _drawWins(ctx, entry, globalRank, rightEdge, midY, fSize, now) {
         const bump = this._bumps.get(entry.code);
-
         let wins  = entry.wins;
         let scale = 1;
-        let color = '#FFC83D';
+        let color, glowColor;
+
+        const rank = globalRank + 1;
+        if (rank === 1)      { color = '#FFD700'; glowColor = 'rgba(255,200,61,0.6)'; }
+        else if (rank === 2) { color = '#C8D4E8'; glowColor = 'rgba(192,210,232,0.4)'; }
+        else if (rank === 3) { color = '#CD9B6E'; glowColor = 'rgba(200,140,80,0.4)'; }
+        else                 { color = '#38D5FF'; glowColor = 'rgba(56,213,255,0.35)'; }
 
         if (bump) {
             const t = Math.min(1, (now - bump.startTime) / bump.duration);
             wins    = bump.toValue;
-
             if (t < 1) {
-                const peak = 0.20;
+                const peak = 0.25;
                 scale = t < peak
-                    ? 1 + 0.50 * (t / peak)
-                    : 1 + 0.50 * this._easeOut(1 - (t - peak) / (1 - peak));
+                    ? 1 + 0.45 * (t / peak)
+                    : 1 + 0.45 * this._easeOut(1 - (t - peak) / (1 - peak));
                 scale = Math.max(1, scale);
-
-                const flash = Math.max(0, 1 - t * 1.8);
-                const r = 255;
-                const g = Math.round(200 + 55 * flash);
-                const b = Math.round(61 + 120 * flash * 0.4);
-                color = `rgb(${r},${g},${b})`;
+                // Flash white-to-gold on win
+                const flash = Math.max(0, 1 - t * 2);
+                color = `rgb(${Math.round(255)},${Math.round(200 + 55 * flash)},${Math.round(61 + 194 * flash)})`;
             } else {
                 this._bumps.delete(entry.code);
             }
         }
 
-        const label = `${wins} ${wins === 1 ? 'WIN' : 'WINS'}`;
+        const label = wins === 1 ? '1 WIN' : `${wins} WINS`;
 
         ctx.save();
-        ctx.font         = `800 ${Math.round(fSize * scale)}px system-ui, Arial, sans-serif`;
+        ctx.font         = gf(800, Math.round(fSize * scale));
         ctx.fillStyle    = color;
         ctx.textAlign    = 'right';
         ctx.textBaseline = 'middle';
 
-        if (scale > 1.1) {
-            ctx.shadowColor = 'rgba(255, 200, 61, 0.55)';
-            ctx.shadowBlur  = 8;
+        if (scale > 1.05 || rank <= 3) {
+            ctx.shadowColor = glowColor;
+            ctx.shadowBlur  = scale > 1.05 ? 12 : 6;
         }
         ctx.fillText(label, rightEdge, midY);
         ctx.restore();
     }
 
-    _drawFlag(ctx, img, fx, fy, fw, fh) {
+    _drawFlag(ctx, img, fx, fy, fw, fh, rank) {
         const ready = img && img.complete && img.naturalWidth > 0;
 
         ctx.save();
@@ -362,20 +444,41 @@ export default class LeaderboardRenderer {
             ctx.imageSmoothingQuality = 'high';
             ctx.drawImage(img, fx, fy, fw, fh);
         } else {
+            // Shimmer placeholder
             const sx   = fx + (this._shimmerPhase * 2 - 0.5) * fw * 2;
-            const grad = ctx.createLinearGradient(sx - fw * 0.6, 0, sx + fw * 0.6, 0);
-            grad.addColorStop(0,    '#101D38');
-            grad.addColorStop(0.45, '#203B68');
+            const grad = ctx.createLinearGradient(sx - fw * 0.5, 0, sx + fw * 0.5, 0);
+            grad.addColorStop(0,    '#0D1929');
+            grad.addColorStop(0.45, '#1A3060');
             grad.addColorStop(0.55, '#2E62E8');
-            grad.addColorStop(1,    '#101D38');
+            grad.addColorStop(1,    '#0D1929');
             ctx.fillStyle = grad;
             ctx.fillRect(fx, fy, fw, fh);
         }
         ctx.restore();
 
-        ctx.strokeStyle = ready ? 'rgba(244, 247, 255, 0.18)' : 'rgba(46, 98, 232, 0.25)';
-        ctx.lineWidth   = 0.6;
+        // Gold border for rank 1, silver for rank 2, subtle for rest
+        let borderColor;
+        if (rank === 0)      borderColor = 'rgba(255,215,0,0.55)';
+        else if (rank === 1) borderColor = 'rgba(192,210,232,0.40)';
+        else                 borderColor = ready ? 'rgba(255,255,255,0.14)' : 'rgba(46,98,232,0.22)';
+
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth   = 0.8;
         this._rrect(ctx, fx, fy, fw, fh, 3);
+        ctx.stroke();
+    }
+
+    _divider(ctx, x, ry, w, rowH) {
+        const divGrad = ctx.createLinearGradient(x, 0, x + w, 0);
+        divGrad.addColorStop(0,   'rgba(61,124,255,0)');
+        divGrad.addColorStop(0.3, 'rgba(61,124,255,0.15)');
+        divGrad.addColorStop(0.7, 'rgba(56,213,255,0.15)');
+        divGrad.addColorStop(1,   'rgba(61,124,255,0)');
+        ctx.strokeStyle = divGrad;
+        ctx.lineWidth   = 0.6;
+        ctx.beginPath();
+        ctx.moveTo(x + 6,     ry + rowH);
+        ctx.lineTo(x + w - 6, ry + rowH);
         ctx.stroke();
     }
 
@@ -384,15 +487,6 @@ export default class LeaderboardRenderer {
         this._fromPage  = fromPage;
         this._toPage    = toPage;
         this._fadeStart = now;
-    }
-
-    _divider(ctx, x, ry, w, rowH, padL, padR) {
-        ctx.strokeStyle = 'rgba(46, 98, 232, 0.18)';
-        ctx.lineWidth   = 0.6;
-        ctx.beginPath();
-        ctx.moveTo(x + padL,     ry + rowH);
-        ctx.lineTo(x + w - padR, ry + rowH);
-        ctx.stroke();
     }
 
     _truncateCached(ctx, text, maxWidth, font) {
@@ -432,9 +526,7 @@ export default class LeaderboardRenderer {
     }
 
     _easeInOut(t) {
-        return t < 0.5
-            ? 4 * t * t * t
-            : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
     }
 
     _easeOut(t) {

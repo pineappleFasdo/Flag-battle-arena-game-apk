@@ -1,3 +1,4 @@
+import { gf, GAME_FONT } from '../GameFont.js';
 // FinalBottomRenderer.js
 // Remaining finalist flags strip — professional sports broadcast graphic
 
@@ -37,7 +38,7 @@ export default class FinalBottomRenderer {
         ctx.save();
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.font         = `800 ${Math.min(headerH * 0.72, 14)}px system-ui, Arial, sans-serif`;
+        ctx.font         = gf(800, Math.min(headerH * 0.72, 14));
         ctx.shadowColor  = 'rgba(61, 124, 255, 0.45)';
         ctx.shadowBlur   = 6;
         ctx.fillStyle    = `rgba(56, 213, 255, ${pulseAlpha})`;

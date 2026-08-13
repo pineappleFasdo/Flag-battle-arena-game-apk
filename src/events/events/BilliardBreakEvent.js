@@ -40,7 +40,7 @@ export default class BilliardBreakEvent {
         const cue = flags[Math.floor(Math.random() * flags.length)];
         const angle = Math.random() * Math.PI * 2;
         // Very high speed — the "break" shot
-        const speed = 22 + Math.random() * 10;
+        const speed = 14 + Math.random() * 6;
 
         Matter.Sleeping.set(cue.body, false);
         Matter.Body.setVelocity(cue.body, {
