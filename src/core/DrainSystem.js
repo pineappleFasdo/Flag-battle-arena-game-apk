@@ -58,10 +58,10 @@ export default class DrainSystem {
         // Wider funnel early → more exits; shrink mode pulls almost everything
         const funnelHalfAngle = this.shrinkMode
             ? Math.PI
-            : Math.max(gapHalfAngle * 4.2, 0.35);
+            : Math.max(gapHalfAngle * 2.2, 0.22);
 
-        const tangentialMult = this.shrinkMode ? 12 : 1.35;
-        const ejectMult      = this.shrinkMode ? 9  : 1.4;
+        const tangentialMult = this.shrinkMode ? 12 : 0.7;
+        const ejectMult      = this.shrinkMode ? 9  : 0.7;
 
         for (const flag of flags) {
 
@@ -93,7 +93,7 @@ export default class DrainSystem {
                 : (1 - Math.abs(diff) / funnelHalfAngle);
 
             // Stronger tangential pull → flags line up with gap faster
-            const tangentialStrength = 0.00085 * closeness * tangentialMult;
+            const tangentialStrength = 0.00055 * closeness * tangentialMult;
 
             const tx  = -Math.sin(flagAngle);
             const ty  =  Math.cos(flagAngle);
@@ -109,7 +109,7 @@ export default class DrainSystem {
             const atBoundary  = dist > this.arena.radius * 0.70;
 
             if (inGapWindow && atBoundary) {
-                const ejectStrength = 0.0038 * ejectMult;
+                const ejectStrength = 0.0022 * ejectMult;
 
                 Matter.Body.applyForce(body, body.position, {
                     x: (dx / dist) * ejectStrength,

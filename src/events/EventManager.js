@@ -13,6 +13,7 @@ import BlackHoleEvent      from "./events/BlackHoleEvent.js";
 import SpinCycleEvent      from "./events/SpinCycleEvent.js";
 import BilliardBreakEvent  from "./events/BilliardBreakEvent.js";
 import PulsarEvent         from "./events/PulsarEvent.js";
+import OrbitDrainEvent     from "./events/OrbitDrainEvent.js";
 
 // Qualifying pool only — LAST STANDING is final-exclusive (not in rotation)
 const ALL_EVENTS = [
@@ -30,6 +31,7 @@ const ALL_EVENTS = [
     SpinCycleEvent,
     BilliardBreakEvent,
     PulsarEvent,
+    OrbitDrainEvent,
 ];
 
 export default class EventManager {

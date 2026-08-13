@@ -14,7 +14,7 @@ export default class ArenaPhysics {
         this.cy     = cy;
         this.radius = radius;
 
-        this.rotationSpeed = 0.024;
+        this.rotationSpeed = 0.016;
         this.angle         = 0;
 
         // PERFORMANCE: 48 segments is visually almost identical and cuts wall physics cost ~50%
@@ -22,8 +22,8 @@ export default class ArenaPhysics {
         this.thickness    = 22;
 
         // Fixed small gap for ALL qualifying rounds (no widen over time)
-        this.initialGapSize = 3;
-        this.maxGapSize     = 3;
+        this.initialGapSize = 2;
+        this.maxGapSize     = 2;
         this.gapSize        = 0;
 
         this.state           = STATE_INTRO;
@@ -133,7 +133,7 @@ export default class ArenaPhysics {
         // ── State machine ──────────────────────────────────────────────────
         if (this.state === STATE_INTRO) {
             this.introTimer++;
-            this.rotationSpeed = 0.024 + 0.010 * Math.sin(this.introTimer * 0.06);
+            this.rotationSpeed = 0.016 + 0.006 * Math.sin(this.introTimer * 0.06);
 
             if (this.introTimer >= this.introDuration) {
                 this.startOpening();
@@ -145,7 +145,7 @@ export default class ArenaPhysics {
             // Slow ease-out: gap creeps open gradually instead of snapping wide
             const eased = 1 - Math.pow(1 - t, 2.4);
             this.gapSize       = Math.max(1, Math.round(this.initialGapSize * eased));
-            this.rotationSpeed = 0.022;
+            this.rotationSpeed = 0.014;
 
             if (this.openingTimer >= this.openingDuration) {
                 this.state   = STATE_PLAYING;
@@ -154,7 +154,7 @@ export default class ArenaPhysics {
 
         } else {
             const remainRatio = this.remainingFlags / Math.max(1, this.totalFlags);
-            this.rotationSpeed = 0.024 + (1 - remainRatio) * 0.012;
+            this.rotationSpeed = 0.016 + (1 - remainRatio) * 0.006;
         }
 
         this.angle += this.rotationSpeed;

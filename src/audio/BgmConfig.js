@@ -5,8 +5,8 @@
 export const BGM = {
     // Qualification / battle rounds
     qualify: {
-        file:   'hot-heat.mp3',
-        volume: 0.18,
+        file:   'Chariots-of-War.mp3',
+        volume: 0.3,
     },
     // Last Flag Standing / elimination (final mode)
     elimination: {

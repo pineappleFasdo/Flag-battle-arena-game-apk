@@ -22,6 +22,8 @@ import EventManager        from "../events/EventManager";
 import TrayLauncher        from "../effects/TrayLauncher";
 import HighestWinsMode     from "../modes/HighestWinsMode";
 import Matter              from "matter-js";
+import { THEMES, DEFAULT_THEME } from "../themes/ThemeConfig.js";
+import SpaceTheme              from "../themes/SpaceTheme.js";
 
 export default class Game {
 
@@ -72,8 +74,10 @@ export default class Game {
         this.fx            = new VisualFX();
         this.audio         = new AudioManager();
         this.commentary    = new CommentarySystem(this.audio);
+        this.spaceTheme    = new SpaceTheme();
 
         this.gameState             = "START_SCREEN";
+        this.theme                 = THEMES[DEFAULT_THEME];
         this.winnerDisplayTime     = 0;
         this.winnerDisplayDuration = 3500;
 
@@ -271,8 +275,9 @@ export default class Game {
      * Called by main.js when the player taps an event card.
      * eventId matches the id defined in SELECTION_EVENTS in main.js.
      */
-    startEvent(eventId) {
+    startEvent(eventId, themeId = DEFAULT_THEME) {
         this._currentEventId = eventId;
+        this.theme = THEMES[themeId] ?? THEMES[DEFAULT_THEME];
 
         // Attach isolated mode controller — classic uses null
         if (eventId === HighestWinsMode.ID) {
@@ -305,6 +310,7 @@ export default class Game {
         this.gameState         = "WINNER_SHOW";
         this.winnerDisplayTime = Date.now();
 
+        if (this.theme?.stars) this.spaceTheme.notifyNotPlaying();
         this.eventManager.end(this._eventCtx());
 
         const isTie = winner?.isTie === true;
@@ -415,6 +421,7 @@ export default class Game {
         this._finalElimFreeze = false;
         this._finalElimActive = null;
         this._finalElimFreezeUntil = 0;
+        if (this.theme?.stars) this.spaceTheme.notifyNotPlaying();
         this._finalElimPhase = null;
 
         if (this.isFinalMode) {
@@ -438,10 +445,10 @@ export default class Game {
         );
         this._nextSpawnPositions = positions;
         // Cap flag size so final round (few countries) matches qualify size
-        const rawW = Math.max(6, spacing * 0.82);
-        const maxW = this.isFinalMode ? 14 : 22;
+        const rawW = Math.max(10, spacing * 1.05);
+        const maxW = this.isFinalMode ? 22 : 32;
         this._nextFlagW = Math.min(rawW, maxW);
-        this._nextFlagH = Math.max(4, this._nextFlagW * 0.70);
+        this._nextFlagH = Math.max(7, this._nextFlagW * 0.70);
 
         this._clearAllFlags();
 
@@ -531,8 +538,8 @@ export default class Game {
             this.layout.arenaX, this.layout.arenaY, spawnRadius, this.totalCountries
         );
         this._nextSpawnPositions = positions;
-        this._nextFlagW = Math.max(6, spacing * 0.82);
-        this._nextFlagH = Math.max(4, this._nextFlagW * 0.70);
+        this._nextFlagW = Math.max(10, Math.min(32, spacing * 1.05));
+        this._nextFlagH = Math.max(7, this._nextFlagW * 0.70);
 
         this.eventManager.pick();
         this._beginNextEvent();
@@ -556,8 +563,8 @@ export default class Game {
             this.arena.initialGapSize = 2;
             this.arena.maxGapSize     = 2;
         } else {
-            this.arena.initialGapSize = 3;
-            this.arena.maxGapSize     = 3;
+            this.arena.initialGapSize = 2;
+            this.arena.maxGapSize     = 2;
         }
         this.arena.syncWalls();
 
@@ -620,6 +627,8 @@ export default class Game {
         this.audio.playRoundStart();
         this.eventManager.start(this._eventCtx());
         if (this.isFinalMode) this._finalRoundNumber++;
+        // Reset asteroid shower clock so it never fires during countdown/next-event
+        if (this.theme?.stars) this.spaceTheme.notifyPlaying();
     }
 
     _clearAllFlags() {
@@ -1066,8 +1075,22 @@ export default class Game {
 
     draw() {
         const { ctx } = this;
-        ctx.fillStyle = "#050816";
+        const bg = this.theme?.bg ?? "#050816";
+        ctx.fillStyle = bg;
         ctx.fillRect(0, 0, this._lw, this._lh);
+        // Space theme: update + draw stars/nebula/asteroids
+        if (this.theme?.stars && this.gameState !== "START_SCREEN") {
+            this.spaceTheme.update(
+                this._lw, this._lh,
+                this.flagManager,
+                this.layout?.arenaX ?? this._lw / 2,
+                this.layout?.arenaY ?? this._lh / 2,
+                this.layout?.arenaRadius ?? 120,
+                Matter,
+                this.gameState
+            );
+            this._drawThemeStars(ctx);
+        }
 
         if (this.gameState === "START_SCREEN") return;
 
@@ -1084,7 +1107,7 @@ export default class Game {
             this.layout.lbRowH, this.layout.lbRowCount
         );
 
-        this.arenaRenderer.draw(ctx, this.arena);
+        this.arenaRenderer.draw(ctx, this.arena, this.theme);
         this.flagManager.draw(ctx);
         this.trayLauncher.draw(ctx);
 
@@ -1119,6 +1142,10 @@ export default class Game {
 
         this.fx.draw(ctx, this._lw, this._lh);
         this._drawCentralOverlay(ctx);
+        // Space theme: flashing "ASTEROID INCOMING!" warning banner
+        if (this.theme?.stars && this.gameState !== "START_SCREEN") {
+            this.spaceTheme.drawWarning(ctx, this._lw, this._lh);
+        }
 
         // Continuous final-mode elim flash (video-style, physics keeps running)
         if (this.isFinalMode && this._finalElimPhase === "elim" &&
@@ -1156,6 +1183,11 @@ export default class Game {
     }
 
     // ── Overlays (unchanged from v5) ──────────────────────────────────────────
+
+    // Delegates star/nebula/asteroid rendering to SpaceTheme
+    _drawThemeStars(ctx) {
+        this.spaceTheme.draw(ctx, this._lw, this._lh);
+    }
 
     _drawCentralOverlay(ctx) {
         if (this.gameState === "START_SCREEN") return;

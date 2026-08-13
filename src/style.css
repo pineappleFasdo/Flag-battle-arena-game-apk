@@ -459,6 +459,54 @@ canvas {
   font-weight: 300;
 }
 
+
+/* ── Theme selector ──────────────────────────────────────────────────────── */
+.nr-theme-section {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto 10px;
+}
+.nr-theme-label,
+.nr-mode-label {
+  font-size: clamp(10px, 2.5vw, 12px);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #91A7C9;
+  opacity: 0.85;
+  margin: 0 0 8px 4px;
+  width: 100%;
+  max-width: 420px;
+}
+.nr-theme-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 14px;
+}
+.nr-theme-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(145, 167, 201, 0.35);
+  background: #0D1628;
+  color: #C5D4EE;
+  font-size: clamp(11px, 3vw, 13px);
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.nr-theme-chip .nr-theme-icon { font-size: 14px; line-height: 1; }
+.nr-theme-chip.nr-theme-active {
+  border-color: var(--th-accent, #3D7CFF);
+  background: #121E38;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--th-accent, #3D7CFF) 35%, transparent);
+  color: #F4F7FF;
+}
+
 /* ── Footer ──────────────────────────────────────────────────────────────── */
 .nr-home-footer {
   font-size: clamp(10px, 2.5vw, 13px);

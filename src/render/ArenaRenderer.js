@@ -1,8 +1,12 @@
-// ArenaRenderer.js — white main ring + subtle electric-blue glow (premium broadcast)
+// ArenaRenderer.js — ring colors driven by active theme
 
 export default class ArenaRenderer {
 
-    draw(ctx, arena) {
+    draw(ctx, arena, theme = null) {
+        const ring      = theme?.ring      ?? "rgba(255, 255, 255, 0.95)";
+        const ringGlow  = theme?.ringGlow  ?? "rgba(56, 213, 255, 0.22)";
+        const ringOuter = theme?.ringOuter ?? "rgba(61, 124, 255, 0.22)";
+        const accent    = theme?.accent    ?? "#3D7CFF";
 
         ctx.save();
 
@@ -14,34 +18,36 @@ export default class ArenaRenderer {
 
         const gapAngle = (arena.gapSize / arena.segmentCount) * Math.PI * 2;
 
-        // Soft outer electric-blue glow (under the ring — kept subtle)
+        // Soft outer glow
         ctx.save();
-        ctx.shadowColor = "rgba(61, 124, 255, 0.40)";
+        ctx.shadowColor = ringGlow;
         ctx.shadowBlur  = 14;
-        ctx.strokeStyle = "rgba(56, 213, 255, 0.22)";
+        ctx.strokeStyle = ringGlow;
         ctx.lineWidth   = 7;
         ctx.lineCap     = "round";
         this._strokeRing(ctx, arena, gapAngle);
         ctx.restore();
 
-        // Main white ring
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+        // Main ring
+        ctx.strokeStyle = ring;
         ctx.lineWidth   = 3;
         ctx.lineCap     = "round";
-        ctx.shadowColor = "rgba(61, 124, 255, 0.28)";
+        ctx.shadowColor = ringGlow;
         ctx.shadowBlur  = 6;
         this._strokeRing(ctx, arena, gapAngle);
 
-        // Subtle blue inner ring
+        // Subtle inner ring
         ctx.shadowBlur  = 0;
-        ctx.strokeStyle = "rgba(61, 124, 255, 0.22)";
+        ctx.strokeStyle = ringOuter;
         ctx.lineWidth   = 1.4;
         this._strokeRing(ctx, arena, gapAngle, -2.2);
 
-        // Very thin outer cyan hint
-        ctx.strokeStyle = "rgba(56, 213, 255, 0.14)";
+        // Thin outer hint
+        ctx.strokeStyle = ringGlow;
+        ctx.globalAlpha = 0.5;
         ctx.lineWidth   = 1;
         this._strokeRing(ctx, arena, gapAngle, 2.5);
+        ctx.globalAlpha = 1;
 
         ctx.restore();
     }

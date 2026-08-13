@@ -1,5 +1,6 @@
 import './style.css';
 import Game from './core/Game';
+import { THEME_LIST, DEFAULT_THEME } from './themes/ThemeConfig.js';
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 const canvas = document.createElement('canvas');
@@ -36,6 +37,8 @@ const SELECTION_EVENTS = [
     // Future home events: push another object here + add a mode class under src/modes/
 ];
 
+let selectedThemeId = DEFAULT_THEME;
+
 const homeScreen = document.createElement('div');
 homeScreen.id = 'nr-home-screen';
 
@@ -63,6 +66,21 @@ homeScreen.innerHTML = `
     <div class="nr-home-tagline">Choose your battle</div>
   </div>
 
+  <div class="nr-theme-section">
+    <div class="nr-theme-label">Theme</div>
+    <div class="nr-theme-list" id="nr-theme-list">
+      ${THEME_LIST.map(th => `
+        <button type="button" class="nr-theme-chip${th.id === selectedThemeId ? ' nr-theme-active' : ''}"
+          data-theme-id="${th.id}"
+          style="--th-accent: ${th.accent};">
+          <span class="nr-theme-icon">${th.icon}</span>
+          <span class="nr-theme-name">${th.name}</span>
+        </button>
+      `).join('')}
+    </div>
+  </div>
+
+  <div class="nr-mode-label">Mode</div>
   <div class="nr-event-list" id="nr-event-list">
     ${SELECTION_EVENTS.map(ev => `
       <button
@@ -90,7 +108,7 @@ homeScreen.innerHTML = `
     `).join('')}
   </div>
 
-  <div class="nr-home-footer">Tap an event to start · 2 modes available</div>
+  <div class="nr-home-footer">Pick a theme, then a mode to start</div>
 `;
 overlay.appendChild(homeScreen);
 
@@ -160,6 +178,16 @@ document.addEventListener('visibilitychange', function () {
 
 requestAnimationFrame(loop);
 
+// ── Theme chip click ──────────────────────────────────────────────────────────
+document.getElementById('nr-theme-list').addEventListener('click', function (e) {
+    const chip = e.target.closest('[data-theme-id]');
+    if (!chip) return;
+    selectedThemeId = chip.dataset.themeId;
+    document.querySelectorAll('.nr-theme-chip').forEach(c => {
+        c.classList.toggle('nr-theme-active', c.dataset.themeId === selectedThemeId);
+    });
+});
+
 // ── Event card click handler ──────────────────────────────────────────────────
 document.getElementById('nr-event-list').addEventListener('click', function (e) {
     const card = e.target.closest('[data-event-id]');
@@ -174,7 +202,7 @@ document.getElementById('nr-event-list').addEventListener('click', function (e) 
     setTimeout(function () {
         homeScreen.style.display = 'none';
         requestWakeLock();
-        game.startEvent(eventId);   // Game.js reads the eventId to configure the session
+        game.startEvent(eventId, selectedThemeId);
     }, 380);
 });
 
