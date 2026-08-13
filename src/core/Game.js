@@ -143,6 +143,13 @@ export default class Game {
 
         // Final-mode stalemate clock (mirrors WinnerManager qualifying logic)
         this._finalStalemateSince = 0;
+
+        // ── Highest Winner Wins — sudden death tiebreaker ─────────────────
+        this._hwSuddenDeathActive   = false;
+        this._hwSuddenDeathFlags    = [];   // countries in the tiebreaker
+        this._hwSuddenDeathWins     = 0;    // shared win count that caused the tie
+        this._suddenDeathBannerStart    = 0;
+        this._suddenDeathBannerDuration = 3800;
     }
 
     get _lw() { return this._logicalW || this.canvas.width; }
@@ -336,6 +343,46 @@ export default class Game {
             }
         }
 
+        // ── Sudden death tiebreaker resolution ───────────────────────────
+        if (this._hwSuddenDeathActive) {
+            if (isTie) {
+                // Tied again — replay sudden death with the same countries
+                const names = (winner.countries ?? []).map(c => c.name).join(" and ");
+                if (names) this.audio.speak(`${names} still tied — replaying sudden death!`);
+                this.restartTimer = setTimeout(() => {
+                    this.restartTimer = null;
+                    this._enterHWSuddenDeath(
+                        this._hwSuddenDeathFlags,
+                        this._hwSuddenDeathWins
+                    );
+                }, this.winnerDisplayDuration);
+            } else {
+                // We have a single sudden death winner — crown them champion
+                const country = winner.country;
+                this._hwSuddenDeathActive = false;
+                this._grandChampion       = country;
+                this._champDisplayStart   = Date.now();
+                this._champCountdownRemain = this._champCountdownSec;
+                this.gameState = "GRAND_CHAMPION";
+                this.audio.playPhase('champion');
+                this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
+                this.audio.playWinner();
+                this.audio.speak(
+                    `${country.name} wins the sudden death and is the Highest Winner Champion!`
+                );
+                if (this._champCountdownTimer) clearInterval(this._champCountdownTimer);
+                this._champCountdownTimer = setInterval(() => {
+                    this._champCountdownRemain--;
+                    if (this._champCountdownRemain <= 0) {
+                        clearInterval(this._champCountdownTimer);
+                        this._champCountdownTimer = null;
+                        this._doReset();
+                    }
+                }, 1000);
+            }
+            return;
+        }
+
         // ── Mode-specific session end ─────────────────────────────────────
         if (this.isHighestWinsMode) {
             const result = this.sessionMode.onRoundComplete(winner);
@@ -361,16 +408,30 @@ export default class Game {
 
     /** End Highest Winner Wins session — champion = most wins, no final. */
     _endHighestWinsSession() {
-        const champ = this.sessionMode?.champion;
+        const mode  = this.sessionMode;
+        const champ = mode?.champion;
+
+        // ── Tie detected: two or more countries share the top win count ──────
+        const tied = mode?.tiedCountries ?? [];
+        if (!champ && tied.length >= 2) {
+            // Derive the shared win count from the live leaderboard
+            const lb2       = this.winnerManager.getLeaderboard();
+            const sharedWins = lb2.length > 0 ? lb2[0].wins : 0;
+            this._enterHWSuddenDeath(tied, sharedWins);
+            return;
+        }
+
         if (!champ) {
-            // No wins recorded — restart session
+            // No wins recorded at all — just restart
             this.restartTimer = setTimeout(() => this._beginNextEvent(), 800);
             return;
         }
 
-        this.isFinalMode = false;
-        this._grandChampion = champ.country;
-        this._champDisplayStart = Date.now();
+        // ── Clear winner ──────────────────────────────────────────────────────
+        this._hwSuddenDeathActive = false;
+        this.isFinalMode          = false;
+        this._grandChampion       = champ.country;
+        this._champDisplayStart   = Date.now();
         this._champCountdownRemain = this._champCountdownSec;
         this.gameState = "GRAND_CHAMPION";
 
@@ -390,6 +451,85 @@ export default class Game {
                 this._doReset();
             }
         }, 1000);
+    }
+
+    /**
+     * Sudden death tiebreaker for Highest Winner Wins.
+     * Only the tied countries enter — one round, winner is champion.
+     * If that round itself ties (stalemate / simultaneous drain), replay with
+     * the same set of countries until a single winner emerges.
+     *
+     * @param {Array<{code,name,image}>} tiedCountries
+     * @param {number} topWins  — the shared win count (for announcement)
+     */
+    _enterHWSuddenDeath(tiedCountries, topWins = 0) {
+        this._hwSuddenDeathActive  = true;
+        this._hwSuddenDeathFlags   = tiedCountries.slice(); // canonical tied set
+        this._hwSuddenDeathWins    = topWins;
+        this.isFinalMode           = false;
+
+        // Show the SUDDEN_DEATH_BANNER state briefly, then kick off the round
+        this.gameState = "SUDDEN_DEATH_BANNER";
+        this._suddenDeathBannerStart = Date.now();
+        this._suddenDeathBannerDuration = 3800; // ms to display the banner
+
+        // Announcement
+        const names = tiedCountries.map(c => c.name).join(", ");
+        this.audio.playRoundStart();
+        this.audio.speak(
+            `It's a tie! ${tiedCountries.length} countries are level on ${topWins} win${topWins === 1 ? "" : "s"}: ${names}. Sudden death!`
+        );
+
+        // Pre-load spawn positions for the tied countries so _beginNextEvent
+        // can run immediately after the banner
+        this.activeCountries = tiedCountries.map(c => {
+            // Find the full country object (has .image already on it)
+            return this.allCountries.find(ac => ac.code === c.code) ?? c;
+        });
+        this.totalCountries = this.activeCountries.length;
+
+        const spawnRadius = this.layout.arenaRadius - 20;
+        const { positions, spacing } = SpawnManager.generate(
+            this.layout.arenaX, this.layout.arenaY, spawnRadius, this.totalCountries
+        );
+        this._nextSpawnPositions = positions;
+        const rawW = Math.max(10, spacing * 1.05);
+        this._nextFlagW = Math.min(rawW, 32);
+        this._nextFlagH = Math.max(7, Math.round(this._nextFlagW * 0.667));
+
+        this._clearAllFlags();
+
+        const launchFlags = this.activeCountries.map(c => ({ country: c }));
+        this.trayLauncher.startLaunch(
+            launchFlags,
+            this.layout.trayTop,
+            this._lw,
+            this.layout.arenaX,
+            this.layout.arenaY,
+            this.layout.arenaRadius,
+            this._nextSpawnPositions,
+            this._nextFlagW,
+            this._nextFlagH
+        );
+
+        // After banner duration, transition to NEXT_EVENT so the normal
+        // countdown → spawn → play pipeline fires
+        if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+        this.restartTimer = setTimeout(() => {
+            this.restartTimer = null;
+            // Transition through NEXT_EVENT → COUNTDOWN → PLAYING as normal
+            // activeCountries / spawn data are already set above
+            this.gameState      = "NEXT_EVENT";
+            this.nextEventTimer = 0;
+            this._elimFlashQueue = [];
+            this._finalElimFreeze = false;
+            this._finalElimActive = null;
+            this._finalElimFreezeUntil = 0;
+            this._finalElimPhase = null;
+            if (this.theme?.stars) this.spaceTheme.notifyNotPlaying();
+            this.eventManager.pick();
+            this.nextEventDuration = 130;
+        }, this._suddenDeathBannerDuration);
     }
 
     // ── Final Mode ────────────────────────────────────────────────────────────
@@ -511,6 +651,11 @@ export default class Game {
         this._finalElimFreezeUntil = 0;
         this._finalElimPhase   = null;
         this._finalStalemateSince = 0;
+
+        // Sudden death tiebreaker reset
+        this._hwSuddenDeathActive = false;
+        this._hwSuddenDeathFlags  = [];
+        this._hwSuddenDeathWins   = 0;
 
         // Mode-specific session init
         if (this.isHighestWinsMode) {
@@ -719,6 +864,13 @@ export default class Game {
 
     update() {
         if (this.gameState === "START_SCREEN")   return;
+
+        // Sudden death banner — purely visual, setTimeout drives transition
+        if (this.gameState === "SUDDEN_DEATH_BANNER") {
+            this.confetti.update();
+            this.fx.update();
+            return;
+        }
 
         // Keep confetti alive + raining during champion screen
         if (this.gameState === "GRAND_CHAMPION") {
@@ -1161,6 +1313,12 @@ export default class Game {
 
         if (this.gameState === "GRAND_CHAMPION") {
             this._drawGrandChampionScreen(ctx);
+            this.confetti.draw(ctx);
+            return;
+        }
+
+        if (this.gameState === "SUDDEN_DEATH_BANNER") {
+            this._drawSuddenDeathBanner(ctx);
             this.confetti.draw(ctx);
             return;
         }
@@ -1767,6 +1925,152 @@ export default class Game {
         ctx.fillText(remText, nameX, bodyTop + bodyH / 2 + nameSize * 1.5);
 
         ctx.restore();
+    }
+
+    _drawSuddenDeathBanner(ctx) {
+        const cw = this._lw, ch = this._lh;
+        const ax = this.layout?.arenaX    ?? cw / 2;
+        const ay = this.layout?.arenaY    ?? ch * 0.42;
+        const R  = this.layout?.arenaRadius ?? Math.min(cw, ch) * 0.38;
+
+        const elapsed  = Date.now() - this._suddenDeathBannerStart;
+        const dur      = this._suddenDeathBannerDuration;
+        // Fade in over 350 ms, fade out over 450 ms at the end
+        let alpha = 1;
+        if (elapsed < 350)        alpha = elapsed / 350;
+        else if (elapsed > dur - 450) alpha = Math.max(0, (dur - elapsed) / 450);
+        alpha = Math.max(0, Math.min(1, alpha));
+
+        const pulse = 0.5 + 0.5 * Math.sin((elapsed / 1000) * Math.PI * 2.2);
+
+        // Full dark background
+        ctx.fillStyle = "#050816";
+        ctx.fillRect(0, 0, cw, ch);
+
+        // Deep red radial glow behind arena
+        const bgGrad = ctx.createRadialGradient(ax, ay, R * 0.1, ax, ay, R * 1.4);
+        bgGrad.addColorStop(0,    `rgba(140, 10, 10, ${0.55 * alpha})`);
+        bgGrad.addColorStop(0.5,  `rgba(60,  5,  5,  ${0.7  * alpha})`);
+        bgGrad.addColorStop(1,    "rgba(5, 8, 22, 1)");
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, cw, ch);
+
+        // Arena ring — red-tinted for sudden death
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.arc(ax, ay, R, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 60, 60, ${0.80 + pulse * 0.15})`;
+        ctx.lineWidth   = 3;
+        ctx.shadowColor = `rgba(255, 40, 40, 0.7)`;
+        ctx.shadowBlur  = 22 + pulse * 10;
+        ctx.stroke();
+        ctx.restore();
+
+        // Content stack centred in the arena circle
+        ctx.save();
+        ctx.globalAlpha  = alpha;
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "middle";
+
+        const iconSize  = Math.min(R * 0.18, 42);
+        const headSize  = Math.min(R * 0.115, 26);
+        const subSize   = Math.min(R * 0.072, 15);
+        const nameSize  = Math.min(R * 0.068, 13);
+        const gap       = Math.max(6, R * 0.05);
+
+        const flags      = this._hwSuddenDeathFlags ?? [];
+        const wins       = this._hwSuddenDeathWins  ?? 0;
+        const nameLines  = flags.map(c => c.name);
+
+        // Total stack height estimate
+        const stackH =
+            iconSize + gap * 0.4 +
+            headSize + gap * 0.6 +
+            subSize  + gap * 0.9 +
+            nameLines.length * (nameSize + gap * 0.4);
+
+        let y = ay - stackH / 2 + iconSize / 2;
+
+        // ⚡ icon
+        ctx.font        = `${iconSize}px system-ui, Apple Color Emoji, sans-serif`;
+        ctx.fillStyle   = "#FF4040";
+        ctx.shadowColor = "rgba(255, 60, 60, 0.8)";
+        ctx.shadowBlur  = 18 + pulse * 10;
+        ctx.fillText("⚡", ax, y);
+        y += iconSize * 0.55 + gap * 0.4;
+
+        // SUDDEN DEATH heading
+        ctx.font        = gf(900, headSize);
+        ctx.fillStyle   = "#FF4040";
+        ctx.shadowBlur  = 16 + pulse * 8;
+        ctx.fillText("SUDDEN DEATH", ax, y);
+        y += headSize + gap * 0.6;
+
+        // "X countries tied on N wins"
+        const winsLabel = `${flags.length} COUNTRIES TIED ON ${wins} WIN${wins === 1 ? "" : "S"}`;
+        ctx.font      = gf(700, subSize);
+        ctx.fillStyle = "#FFB0B0";
+        ctx.shadowBlur = 8;
+        ctx.fillText(winsLabel, ax, y);
+        y += subSize + gap * 0.9;
+
+        // Individual country names
+        ctx.font      = gf(600, nameSize);
+        ctx.fillStyle = "#F4F7FF";
+        ctx.shadowBlur = 6;
+        for (const name of nameLines) {
+            ctx.fillText(name, ax, y);
+            y += nameSize + gap * 0.4;
+        }
+
+        ctx.restore();
+
+        // Flashing bottom strip
+        const stripAlpha = alpha * (0.55 + 0.45 * Math.sin(elapsed / 220));
+        ctx.save();
+        ctx.globalAlpha = stripAlpha;
+        const stripH  = Math.max(28, ch * 0.04);
+        const stripY  = ay + R + Math.max(12, R * 0.12);
+        const stripW  = Math.min(cw * 0.72, 380);
+        const stripX  = ax - stripW / 2;
+        const stripBg = ctx.createLinearGradient(stripX, 0, stripX + stripW, 0);
+        stripBg.addColorStop(0,   "rgba(140,10,10,0)");
+        stripBg.addColorStop(0.3, "rgba(200,20,20,0.90)");
+        stripBg.addColorStop(0.7, "rgba(200,20,20,0.90)");
+        stripBg.addColorStop(1,   "rgba(140,10,10,0)");
+        ctx.fillStyle = stripBg;
+        this._rrectSD(ctx, stripX, stripY - stripH / 2, stripW, stripH, stripH / 2);
+        ctx.fill();
+
+        const stripFontSize = Math.min(stripH * 0.52, 14);
+        ctx.font        = gf(800, stripFontSize);
+        ctx.fillStyle   = "#FFFFFF";
+        ctx.textAlign   = "center";
+        ctx.textBaseline = "middle";
+        ctx.shadowColor = "rgba(0,0,0,0.8)";
+        ctx.shadowBlur  = 6;
+        ctx.fillText("ONE ROUND · WINNER TAKES ALL", ax, stripY);
+        ctx.restore();
+    }
+
+    /** Rounded rect helper used only by _drawSuddenDeathBanner */
+    _rrectSD(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        if (typeof ctx.roundRect === "function") {
+            ctx.roundRect(x, y, w, h, r);
+        } else {
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.closePath();
+        }
     }
 
     _drawGrandChampionScreen(ctx) {

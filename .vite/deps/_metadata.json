@@ -1,0 +1,55 @@
+{
+  "hash": "0f010e42",
+  "configHash": "341445ad",
+  "lockfileHash": "e3b0c442",
+  "browserHash": "2d921c67",
+  "optimized": {
+    "@capacitor-community/text-to-speech": {
+      "src": "../../node_modules/@capacitor-community/text-to-speech/dist/esm/index.js",
+      "file": "@capacitor-community_text-to-speech.js",
+      "fileHash": "8be39f4b",
+      "needsInterop": false
+    },
+    "@capacitor/app": {
+      "src": "../../node_modules/@capacitor/app/dist/esm/index.js",
+      "file": "@capacitor_app.js",
+      "fileHash": "d24ee83b",
+      "needsInterop": false
+    },
+    "@capacitor/splash-screen": {
+      "src": "../../node_modules/@capacitor/splash-screen/dist/esm/index.js",
+      "file": "@capacitor_splash-screen.js",
+      "fileHash": "b0533d32",
+      "needsInterop": false
+    },
+    "@capacitor/status-bar": {
+      "src": "../../node_modules/@capacitor/status-bar/dist/esm/index.js",
+      "file": "@capacitor_status-bar.js",
+      "fileHash": "e53b483b",
+      "needsInterop": false
+    },
+    "matter-js": {
+      "src": "../../node_modules/matter-js/build/matter.js",
+      "file": "matter-js.js",
+      "fileHash": "f95d9b52",
+      "needsInterop": true
+    }
+  },
+  "chunks": {
+    "web-TAXCYWYU": {
+      "file": "web-TAXCYWYU.js"
+    },
+    "web-DQQBCKIP": {
+      "file": "web-DQQBCKIP.js"
+    },
+    "web-G4N5OVJ2": {
+      "file": "web-G4N5OVJ2.js"
+    },
+    "chunk-2S3ENIRZ": {
+      "file": "chunk-2S3ENIRZ.js"
+    },
+    "chunk-BUSYA2B4": {
+      "file": "chunk-BUSYA2B4.js"
+    }
+  }
+}

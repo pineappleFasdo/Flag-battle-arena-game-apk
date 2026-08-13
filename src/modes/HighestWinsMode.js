@@ -82,19 +82,38 @@ export default class HighestWinsMode {
         this.ended = true;
         const lb = this.game.winnerManager.getLeaderboard();
         if (lb.length === 0) {
-            this.champion = null;
+            this.champion      = null;
+            this.tiedCountries = [];
             return;
         }
+
+        const topWins = lb[0].wins;
+        // Collect every country that shares the highest win count
+        const tied = lb.filter(e => e.wins === topWins);
+
+        if (tied.length > 1) {
+            // Multiple countries share the top score — sudden death needed
+            this.champion      = null;
+            this.tiedCountries = tied.map(e => ({
+                code  : e.code,
+                name  : e.name,
+                image : e.image,
+            }));
+            return;
+        }
+
+        // Clear winner
+        this.tiedCountries = [];
         const top = lb[0];
         this.champion = {
-            code: top.code,
-            name: top.name,
-            wins: top.wins,
-            image: top.image,
-            country: {
-                code: top.code,
-                name: top.name,
-                image: top.image,
+            code    : top.code,
+            name    : top.name,
+            wins    : top.wins,
+            image   : top.image,
+            country : {
+                code  : top.code,
+                name  : top.name,
+                image : top.image,
             },
         };
     }
