@@ -416,36 +416,44 @@ export default class AudioManager {
     // ── Background music (HTMLAudioElement, loops until stopBGM) ─────────────
     // Use playPhase('qualify' | 'elimination' | 'champion') — filenames in BgmConfig.js
 
-    playPhase(phase) {
+    playPhase(phase, { loop } = {}) {
         const entry = BGM[phase];
         if (!entry?.file) {
             this.stopBGM();
             return;
         }
-        this.playBGM(BGM_BASE + entry.file, entry.volume ?? 0.18);
+        // Champion sting plays once by default (no endless tada loop)
+        const shouldLoop = loop != null ? loop : (phase !== 'champion');
+        this.playBGM(BGM_BASE + entry.file, entry.volume ?? 0.18, { loop: shouldLoop });
     }
 
-    playBGM(src, volume = 0.18) {
+    playBGM(src, volume = 0.18, { loop = true } = {}) {
         this.stopBGM();
         try {
             const a = new Audio();
             a.preload = 'auto';
-            a.loop = true;
-            a.setAttribute('loop', 'loop');
+            a.loop = !!loop;
+            if (loop) a.setAttribute('loop', 'loop');
+            else a.removeAttribute('loop');
             a.volume = Math.max(0, Math.min(1, volume));
             // Fallback if native loop fails on some WebViews
-            a.addEventListener('ended', () => {
-                if (this._bgm === a) {
-                    try {
-                        a.currentTime = 0;
-                        a.play().catch(() => {});
-                    } catch (e) {}
-                }
-            });
+            if (loop) {
+                a.addEventListener('ended', () => {
+                    if (this._bgm === a) {
+                        try {
+                            a.currentTime = 0;
+                            a.play().catch(() => {});
+                        } catch (e) {}
+                    }
+                });
+            } else {
+                a.addEventListener('ended', () => {
+                    if (this._bgm === a) this.stopBGM();
+                });
+            }
             a.src = src;
             this._bgm = a;
             const tryPlay = () => a.play().catch(() => {});
-            // Play when ready; also try immediately (user gesture path)
             a.addEventListener('canplay', tryPlay, { once: true });
             tryPlay();
         } catch (e) {
@@ -458,11 +466,30 @@ export default class AudioManager {
             const a = this._bgm;
             this._bgm = null;
             try {
+                a.loop = false;
+                a.onended = null;
                 a.pause();
+                a.currentTime = 0;
                 a.removeAttribute('src');
+                a.src = '';
                 a.load();
             } catch (e) {}
         }
+        // Nuclear: stop ANY lingering HTMLAudioElements (looping battle BGM after 3-2-1)
+        try {
+            if (typeof document !== 'undefined') {
+                document.querySelectorAll('audio').forEach((el) => {
+                    try {
+                        el.loop = false;
+                        el.onended = null;
+                        el.pause();
+                        el.currentTime = 0;
+                        el.removeAttribute('src');
+                        el.src = '';
+                    } catch (_) {}
+                });
+            }
+        } catch (_) {}
     }
 
     setVolume(v) {

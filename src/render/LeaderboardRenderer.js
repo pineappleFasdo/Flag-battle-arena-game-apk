@@ -8,6 +8,7 @@ export default class LeaderboardRenderer {
     constructor() {
         this._isFinalMode       = false;
         this._isHighestWinsMode = false;
+        this._isLongBattleMode  = false;
         this._allRows      = [];
         this._bumps        = new Map();
         this._newRows      = new Set();
@@ -47,6 +48,10 @@ export default class LeaderboardRenderer {
 
     setHighestWinsMode(enabled) {
         this._isHighestWinsMode = !!enabled;
+    }
+
+    setLongBattleMode(enabled) {
+        this._isLongBattleMode = !!enabled;
     }
 
     markDirty(rows, winCode) {
@@ -179,6 +184,8 @@ export default class LeaderboardRenderer {
         const hFontSize = Math.max(8, Math.round(headerH * 0.44));
         const label = this._isFinalMode
             ? '⚔️  LAST FLAG STANDING'
+            : this._isLongBattleMode
+                ? '⏱️  5H ROUND STANDINGS'
             : this._isHighestWinsMode
                 ? '🏆  LEADERBOARD'
                 : '🏅  QUALIFIED FOR FINAL';

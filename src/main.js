@@ -1,6 +1,7 @@
 import './style.css';
 import Game from './core/Game';
 import HighestWinsMode from './modes/HighestWinsMode.js';
+import LongBattleMode from './modes/LongBattleMode.js';
 import { THEME_LIST, DEFAULT_THEME } from './themes/ThemeConfig.js';
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
@@ -35,7 +36,16 @@ const SELECTION_EVENTS = [
         glowColor   : 'rgba(255, 200, 61, 0.22)',
         badge       : 'NEW',
     },
-    // Future home events: push another object here + add a mode class under src/modes/
+    {
+        id          : 'long_battle',
+        icon        : '⏱️',
+        title       : '5 Hour Championship',
+        subtitle    : '40-min rounds for 5 hours · highest wins each round · elimination grand final',
+        color       : '#A78BFA',
+        borderColor : 'rgba(167, 139, 250, 0.75)',
+        glowColor   : 'rgba(167, 139, 250, 0.28)',
+        badge       : '5H LIVE',
+    },
 ];
 
 let selectedThemeId = DEFAULT_THEME;
@@ -364,6 +374,105 @@ document.addEventListener('keydown', function (e) {
             game.sessionMode._declareChampion();
         }
         game._endHighestWinsSession();
+    }
+
+    // ── Long Battle (5H Championship) test keys ─────────────────────────────
+    // Shift+T — toggle FAST test mode (45s segments instead of 40 min)
+    if (e.key === 'T' || e.key === 't') {
+        try {
+            const cur = localStorage.getItem('flag_battle_lb_fast') === '1';
+            localStorage.setItem('flag_battle_lb_fast', cur ? '0' : '1');
+            console.log(
+                '[DEBUG] Shift+T — Long Battle FAST mode:',
+                !cur ? 'ON (45s per round)' : 'OFF (40 min per round)',
+                '— restart the 5H event for it to apply.'
+            );
+            alert(
+                (!cur
+                    ? 'FAST test mode ON: ~30s rounds, ~5s winner screen.\nRestart 5 Hour Championship to apply.'
+                    : 'FAST test mode OFF: each round = 40 minutes.\nRestart 5 Hour Championship to apply.')
+            );
+        } catch (err) {
+            console.warn('[DEBUG] localStorage not available', err);
+        }
+    }
+
+    // Shift+L — IMMEDIATELY end current Long Battle segment (no wait)
+    if (e.key === 'L' || e.key === 'l') {
+        if (!game.isLongBattleMode) {
+            console.warn('[DEBUG] Shift+L only works in 5 Hour Championship mode.');
+            return;
+        }
+        if (game.sessionMode && game.sessionMode.inGrandFinal) {
+            console.warn('[DEBUG] Shift+L — already in Grand Final.');
+            return;
+        }
+
+        // Ensure someone is on the leaderboard so a Round Winner can be recorded
+        var lb = game.winnerManager.getLeaderboard();
+        if (!lb.length) {
+            var pool = (game.activeCountries && game.activeCountries.length)
+                ? game.activeCountries
+                : (game.allCountries || []);
+            var n = Math.min(3, pool.length);
+            for (var i = 0; i < n; i++) {
+                var c = pool[i];
+                game.winnerManager._wins[c.code] = {
+                    name: c.name,
+                    imageSrc: (c.image && c.image.src) ? c.image.src : null,
+                    wins: 3 - i,
+                };
+                if (c.image) game.winnerManager._imageCache[c.code] = c.image;
+            }
+            try { game.winnerManager._saveWins(); } catch (_) {}
+            lb = game.winnerManager.getLeaderboard();
+        }
+
+        var result = game.sessionMode.debugForceCloseSegment();
+        console.log(
+            '[DEBUG] Shift+L — Forced end of segment. Result:',
+            result,
+            '| Round winners so far:',
+            (game.sessionMode.segmentWinners || []).map(function (w) {
+                return 'R' + w.segment + ':' + w.name;
+            }).join(', ')
+        );
+
+        if (result === 'grand_final') {
+            game._enterLongBattleGrandFinal();
+        } else if (result === 'segment_end') {
+            game._showLongBattleSegmentWinner();
+        }
+    }
+
+    // Shift+M — seed 5+ round winners and jump straight to Grand Final
+    if (e.key === 'M' || e.key === 'm') {
+        if (!game.isLongBattleMode) {
+            console.warn('[DEBUG] Shift+M only works in 5 Hour Championship mode.');
+            return;
+        }
+        const pool = game.allCountries || [];
+        if (pool.length) {
+            game.winnerManager.clearWins();
+            const seedN = Math.min(8, pool.length);
+            for (let i = 0; i < seedN; i++) {
+                const c = pool[i];
+                game.winnerManager._wins[c.code] = {
+                    name: c.name,
+                    imageSrc: c.image && c.image.src ? c.image.src : null,
+                    wins: 8 - i,
+                };
+                if (c.image) game.winnerManager._imageCache[c.code] = c.image;
+            }
+            try { game.winnerManager._saveWins(); } catch (_) {}
+        }
+        const winners = game.sessionMode.debugSeedWinnersAndGotoFinal(6);
+        console.log(
+            '[DEBUG] Shift+M — Seeded round winners:',
+            winners.map(function (w) { return 'R' + w.segment + ':' + w.name; }).join(', '),
+            '→ entering Grand Final'
+        );
+        game._enterLongBattleGrandFinal();
     }
 });
 

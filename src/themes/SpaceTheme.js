@@ -44,6 +44,8 @@ export default class SpaceTheme {
         this._planets   = [];
         this._shooters  = [];   // occasional distant shooting stars
         this._asteroids = [];
+        /** When true: no showers, no burns (elimination / final rounds). */
+        this._asteroidsDisabled = false;
         this._impacts   = [];
         this._frame     = 0;
         this._lw        = 0;
@@ -113,6 +115,23 @@ export default class SpaceTheme {
         this._burnEffects         = [];
         this._currentFlags        = 0;
         this._totalFlags          = 0;
+    }
+
+    /**
+     * Call when entering elimination / Last Standing / Grand Final.
+     * Asteroids are fully off for that round (prevents empty-arena softlock).
+     */
+    setAsteroidsDisabled(disabled) {
+        this._asteroidsDisabled = !!disabled;
+        if (disabled) {
+            this._asteroids       = [];
+            this._impacts         = [];
+            this._burnEffects     = [];
+            this._showerState     = "WAITING";
+            this._showerBatchLeft = 0;
+            this._warningLife     = 0;
+            this.onFlagBurned     = null;
+        }
     }
 
     /** Call when game leaves PLAYING (winner, next-event, etc.) */
@@ -297,6 +316,7 @@ export default class SpaceTheme {
 
     // ── Start a shower burst ──────────────────────────────────────────────────
     _startShower(lw, lh, arenaX, arenaY) {
+        if (this._asteroidsDisabled) return;
         this._showerState         = "ACTIVE";
         this._showerActiveFrames  = 0;
         const count = 8 + Math.floor(Math.random()*7);   // 8-14 asteroids per shower
@@ -312,6 +332,15 @@ export default class SpaceTheme {
     // ── Main update ───────────────────────────────────────────────────────────
     update(lw, lh, flagManager, arenaX, arenaY, arenaRadius, Matter, gameState,
            currentFlags = 0, totalFlags = 0) {
+        if (this._asteroidsDisabled) {
+            this._asteroids = [];
+            this._impacts = [];
+            this._showerState = 'WAITING';
+            this._showerBatchLeft = 0;
+            this._warningLife = 0;
+            // still allow starfield to run below — fall through without showers
+        }
+
         if (!this._built || lw!==this._lw || lh!==this._lh) this.build(lw,lh);
 
         this._frame++;
@@ -402,7 +431,7 @@ export default class SpaceTheme {
                         this._framesUntilShower = this._randDelay(false);
                     } else if (this._arenaIsFull()) {
                         // Arena has >= 35% flags alive — fire the shower!
-                        this._startShower(lw, lh, arenaX, arenaY);
+                        if (!this._asteroidsDisabled) this._startShower(lw, lh, arenaX, arenaY);
                     } else {
                         // Mid-density (10-35%): tail of the round, reschedule
                         // for next round rather than hanging in an indefinite stall.

@@ -22,6 +22,7 @@ import LeaderboardRenderer from "../render/LeaderboardRenderer";
 import EventManager        from "../events/EventManager";
 import TrayLauncher        from "../effects/TrayLauncher";
 import HighestWinsMode     from "../modes/HighestWinsMode";
+import LongBattleMode       from "../modes/LongBattleMode";
 import Matter              from "matter-js";
 import { THEMES, DEFAULT_THEME } from "../themes/ThemeConfig.js";
 import SpaceTheme              from "../themes/SpaceTheme.js";
@@ -105,6 +106,8 @@ export default class Game {
         this._champCountdownSec    = 120;
         this._champCountdownTimer  = null;
         this._champCountdownRemain = 120;
+        this._champPermanent       = false;
+        this._lbGrandFinalPending  = false;
 
         this.nextEventTimer    = 0;
         this.nextEventDuration = 150;
@@ -291,12 +294,15 @@ export default class Game {
         // Attach isolated mode controller — classic uses null
         if (eventId === HighestWinsMode.ID) {
             this.sessionMode = new HighestWinsMode(this);
+        } else if (eventId === LongBattleMode.ID) {
+            this.sessionMode = new LongBattleMode(this);
         } else {
             this.sessionMode = null; // classic 40-min qualifier
         }
 
         // Tell leaderboard renderer which label to use
         this.leaderboardRenderer?.setHighestWinsMode(this.isHighestWinsMode);
+        this.leaderboardRenderer?.setLongBattleMode?.(this.isLongBattleMode);
 
         this._doReset();
     }
@@ -311,7 +317,21 @@ export default class Game {
         return this.sessionMode instanceof HighestWinsMode;
     }
 
+    /** True when running the 5-hour / 8×40min championship. */
+    get isLongBattleMode() {
+        return this.sessionMode instanceof LongBattleMode;
+    }
+
     // ── Winner handling (qualifying) ──────────────────────────────────────────
+
+
+    _clearRestartTimer() {
+        if (this.restartTimer) {
+            try { clearTimeout(this.restartTimer); } catch (_) {}
+            try { clearInterval(this.restartTimer); } catch (_) {}
+            this.restartTimer = null;
+        }
+    }
 
     handleWinner(winner) {
         if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
@@ -339,7 +359,7 @@ export default class Game {
 
             // Classic only: remove winner from pool so they sit out until recycle
             // Highest-Wins mode keeps everyone eligible (accumulate wins)
-            if (!this.isHighestWinsMode) {
+            if (!this.isHighestWinsMode && !this.isLongBattleMode) {
                 this._removeWinnerFromPool(winner.country.code);
             }
         }
@@ -391,6 +411,20 @@ export default class Game {
                 this._endHighestWinsSession();
                 return;
             }
+        } else if (this.isLongBattleMode) {
+            const result = this.sessionMode.onRoundComplete(winner);
+            if (result === "grand_final") {
+                this._enterLongBattleGrandFinal();
+                return;
+            }
+            if (result === "segment_end") {
+                this._showLongBattleSegmentWinner();
+                return;
+            }
+            if (result === "end") {
+                this._endHighestWinsSession();
+                return;
+            }
         } else if (this.sessionStartTime > 0) {
             // Classic: 40 minutes up → Last Standing Final Mode
             const elapsed = Date.now() - this.sessionStartTime;
@@ -400,7 +434,7 @@ export default class Game {
         }
 
         // Qualifying keeps random events; final uses dedicated LAST STANDING physics
-        if (this.isFinalMode) this.eventManager.pickLastStanding();
+        if (this.isFinalMode) this.eventManager.pickEarthquake();
         else this.eventManager.pick();
 
         const displayDuration = (isTie && winner.isSilent) ? 500 : this.winnerDisplayDuration;
@@ -452,6 +486,187 @@ export default class Game {
                 this._doReset();
             }
         }, 1000);
+    }
+
+    // ── Long Battle (5H Championship) ─────────────────────────────────────────
+
+    /**
+     * After a 40-min segment ends: celebrate the segment winner, then continue.
+     */
+    _showLongBattleSegmentWinner() {
+        const mode = this.sessionMode;
+        const w = mode?.lastSegmentWinner;
+        this.gameState = "WINNER_SHOW";
+        this.winnerDisplayTime = Date.now();
+
+        // ~1 minute on production (5s in FAST test) before next 40-min round
+        const holdMs = (typeof mode?.constructor?.ROUND_WINNER_DISPLAY_MS === "number")
+            ? mode.constructor.ROUND_WINNER_DISPLAY_MS
+            : 60 * 1000;
+
+        if (w) {
+            this.confetti.start(this._lw / 2, this._lh * 0.36, 120);
+            this.audio.playWinner();
+            this.audio.speak(
+                `Time is up! ${w.name} wins Round ${w.segment} with ${w.wins} win${w.wins === 1 ? "" : "s"}!`
+            );
+            // Keep on the flash strip under the leaderboard
+            this._lbSegmentFlashQueue = this._lbSegmentFlashQueue || [];
+            this._lbSegmentFlashQueue.push({
+                ...w,
+                showUntil: Date.now() + Math.max(holdMs, 15000),
+            });
+        }
+
+        const nextSeg = (mode?.segmentIndex ?? 0) + 1;
+        this.restartTimer = setTimeout(() => {
+            this.restartTimer = null;
+            if (mode && !mode.inGrandFinal) {
+                this.audio.speak(`Round ${nextSeg} begins now!`);
+            }
+            this._beginNextEvent();
+        }, holdMs);
+    }
+
+    /**
+     * All Round Winners → Grand Final (Last Flag Standing elimination).
+     * IMPORTANT: leave PLAYING immediately and clear bodies so final-elim
+     * logic cannot wipe finalists before they spawn.
+     */
+    _enterLongBattleGrandFinal() {
+        const mode = this.sessionMode;
+        let finalists = mode?.getGrandFinalists?.() ?? [];
+
+        // Resolve to full country objects (with images) from the master list
+        const resolveCountry = (f) => {
+            const full = this.allCountries.find(c => c.code === f.code);
+            if (full) {
+                if (!full.image && this.flagLoader) {
+                    full.image = this.flagLoader.load(full.code);
+                }
+                return full;
+            }
+            const c = {
+                code: f.code,
+                name: f.name,
+                image: f.image || (this.flagLoader ? this.flagLoader.load(f.code) : null),
+            };
+            return c;
+        };
+
+        // If seed path produced thin entries, rebuild from segmentWinners / allCountries
+        if (finalists.length < 2 && mode?.segmentWinners?.length) {
+            finalists = mode.getGrandFinalists();
+        }
+
+        if (finalists.length < 2) {
+            // Pad with random countries so we can still test the final
+            const need = 6 - finalists.length;
+            const have = new Set(finalists.map(f => f.code));
+            for (const c of this.allCountries) {
+                if (need <= 0) break;
+                if (have.has(c.code)) continue;
+                finalists.push({
+                    code: c.code,
+                    name: c.name,
+                    image: c.image,
+                    country: c,
+                });
+                have.add(c.code);
+            }
+        }
+
+        if (finalists.length < 2) {
+            const last = mode?.segmentWinners?.[mode.segmentWinners.length - 1];
+            if (last) {
+                this._triggerGrandChampion({
+                    code: last.code,
+                    name: last.name,
+                    image: last.image,
+                });
+                return;
+            }
+            console.warn("[LongBattle] Grand Final aborted — fewer than 2 finalists");
+            return;
+        }
+
+        // ── Stop current arena immediately (prevents final-elim eating finalists)
+        this._clearRestartTimer();
+        // Hold state that update() will NOT auto-advance into countdown
+        this._lbGrandFinalPending = true;
+        this.gameState = "NEXT_EVENT";
+        this.nextEventTimer = 0;
+        this.nextEventDuration = 999999; // block auto NEXT_EVENT → countdown race
+        try { this.eventManager.end(this._eventCtx()); } catch (_) {}
+        try { this.trayLauncher.cancel(); } catch (_) {}
+        try { this._clearAllFlags(); } catch (_) {}
+        if (this.eliminationManager) {
+            this.eliminationManager.eliminated = [];
+            this.eliminationManager._lastBatchSize = 0;
+            if (typeof this.eliminationManager.reset === "function") {
+                this.eliminationManager.reset();
+            }
+        }
+
+        const countries = finalists.map(resolveCountry).filter(Boolean);
+        // De-dupe by code
+        const seen = new Set();
+        const unique = [];
+        for (const c of countries) {
+            if (!c?.code || seen.has(c.code)) continue;
+            seen.add(c.code);
+            unique.push(c);
+        }
+
+        this.isFinalMode = true;
+        try { this.spaceTheme?.setAsteroidsDisabled?.(true); } catch (_) {}
+        this._hwSuddenDeathActive = false;
+        this._finalists = unique.map(c => ({ country: c }));
+        this._finalEliminated = [];
+        this._finalTotalCount = unique.length;
+        this._finalRoundNumber = 0;
+        this._finalElimFreeze = false;
+        this._finalElimActive = null;
+        this._finalElimPhase = null;
+        this._elimFlashQueue = [];
+        this._emptyArenaSince = 0;
+
+        this.activeCountries = unique.slice();
+        this.totalCountries = unique.length;
+
+        this.winnerManager.clearWins();
+        this.leaderboardRenderer.reset();
+        this.leaderboardRenderer.setFinalMode(true);
+
+        this.audio.playPhase('elimination');
+        this.audio.speak(
+            `Grand Final elimination! ${unique.length} round winners — last flag standing is the champion!`
+        );
+
+        this._lbSegmentFlashQueue = this._lbSegmentFlashQueue || [];
+        for (const w of (mode?.segmentWinners || [])) {
+            this._lbSegmentFlashQueue.push({ ...w, showUntil: Date.now() + 15000 });
+        }
+
+        console.log(
+            "[LongBattle] Grand Final finalists:",
+            unique.map(c => c.name).join(", ")
+        );
+
+        // Brief pause then spawn via standard final pipeline (once)
+        this._clearRestartTimer();
+        this.restartTimer = setTimeout(() => {
+            this.restartTimer = null;
+            if (this.gameState === "GRAND_CHAMPION" || this._champPermanent) return;
+            // Re-assert finalists
+            this.isFinalMode = true;
+            this._finalists = unique.map(c => ({ country: c }));
+            this.activeCountries = unique.slice();
+            this.totalCountries = unique.length;
+            this._lbGrandFinalPending = false;
+            this.nextEventDuration = 130;
+            this._beginNextEvent();
+        }, 1200);
     }
 
     /**
@@ -543,6 +758,7 @@ export default class Game {
         this._finalRoundNumber = 0;
         this._finalEliminated  = [];
         this._grandChampion    = null;
+        try { this.spaceTheme?.setAsteroidsDisabled?.(true); } catch (_) {}
 
         const lb = this.winnerManager.getLeaderboard();
         this._finalists = lb
@@ -563,6 +779,15 @@ export default class Game {
     // ── Begin next event (qualifying or final) ────────────────────────────────
 
     _beginNextEvent() {
+        // Never start another arena after 5H champion is locked
+        if (this._champPermanent || this.gameState === "GRAND_CHAMPION") {
+            console.warn("[Game] _beginNextEvent blocked — champion locked");
+            return;
+        }
+        if (this.sessionMode && this.sessionMode.ended && !this.isFinalMode) {
+            console.warn("[Game] _beginNextEvent blocked — session ended");
+            return;
+        }
         this.gameState      = "NEXT_EVENT";
         this.nextEventTimer = 0;
         this._elimFlashQueue = [];
@@ -573,11 +798,22 @@ export default class Game {
         this._finalElimPhase = null;
 
         if (this.isFinalMode) {
-            // Classic Final only: LAST STANDING sequential exits
-            this.activeCountries = this._finalists.map(f => f.country);
-            this.eventManager.pickLastStanding();
-        } else if (this.isHighestWinsMode) {
-            // Highest Wins: everyone stays eligible; mode picks the batch
+            // Final / Long-Battle Grand Final: only finalists, Last Standing
+            const finals = (this._finalists || [])
+                .map(f => f?.country)
+                .filter(Boolean);
+            if (finals.length >= 2) {
+                this.activeCountries = finals;
+            } else if (!this.activeCountries?.length) {
+                // Last-resort pad so the arena is never empty in final
+                this.activeCountries = this.allCountries.slice(0, 6);
+                this._finalists = this.activeCountries.map(c => ({ country: c }));
+            }
+            this.totalCountries = this.activeCountries.length;
+            this._finalTotalCount = Math.max(this._finalTotalCount || 0, this.totalCountries);
+            this.eventManager.pickEarthquake();
+        } else if (this.isHighestWinsMode || this.isLongBattleMode) {
+            // Highest Wins / Long Battle: everyone stays eligible; mode picks the batch
             this.activeCountries = this.sessionMode.pickBatch();
             this.eventManager.pick();
         } else {
@@ -666,15 +902,19 @@ export default class Game {
         this._hwSuddenDeathWins   = 0;
 
         // Mode-specific session init
-        if (this.isHighestWinsMode) {
+        if (this.isHighestWinsMode || this.isLongBattleMode) {
             this.sessionMode.onSessionStart();
         } else {
             // Classic: fresh qualifying pool — winners sit out after each win
             this._initQualifyPool();
         }
 
-        // Qualification BGM — file set in src/audio/BgmConfig.js
-        this.audio.playPhase('qualify');
+        // Qualification / battle BGM (after 3-2-1). Skip if session already finished.
+        if (!(this.sessionMode && this.sessionMode.ended)) {
+            this.audio.playPhase('qualify');
+        } else {
+            try { this.audio.stopBGM(); } catch (_) {}
+        }
 
         this.trayLauncher.cancel();
         this._clearAllFlags();
@@ -683,7 +923,7 @@ export default class Game {
         this.nextEventTimer = 0;
 
         // Pick first batch
-        if (this.isHighestWinsMode) {
+        if (this.isHighestWinsMode || this.isLongBattleMode) {
             this.activeCountries = this.sessionMode.pickBatch();
         } else {
             this.activeCountries = this._pickQualifyBatch();
@@ -707,6 +947,10 @@ export default class Game {
     // ── Countdown ─────────────────────────────────────────────────────────────
 
     _beginCountdown() {
+        if (this._champPermanent || this.gameState === "GRAND_CHAMPION") {
+            console.warn("[Game] _beginCountdown blocked — champion locked");
+            return;
+        }
         this.gameState           = "COUNTDOWN";
         this.restartCountdown    = 3;
         this._countdownTickStart = performance.now();
@@ -755,6 +999,7 @@ export default class Game {
         this.audio.resetMilestones();
         this.audio.playCountdown(3);
 
+        this._clearRestartTimer();
         this.restartTimer = setInterval(() => {
             this.restartCountdown--;
             this._countdownTickStart = performance.now();
@@ -786,18 +1031,27 @@ export default class Game {
         this.arena.gapSize = this.arena.initialGapSize;
         this.arena.syncWalls();
         this.audio.playRoundStart();
+        // If championship already finished, never keep battle BGM running
+        if (this.sessionMode && this.sessionMode.ended) {
+            try { this.audio.stopBGM(); } catch (_) {}
+        }
         this.eventManager.start(this._eventCtx());
         if (this.isFinalMode) this._finalRoundNumber++;
 
         // Reset asteroid elimination tracking for this round
         this._asteroidElimMsg = null;
 
-        // Wire up asteroid burn callback so flags are immediately eliminated
-        // when struck rather than just given velocity
+        // Elimination / Grand Final: NEVER allow asteroids (empty-arena softlock)
         if (this.theme?.stars) {
-            this.spaceTheme.onFlagBurned = (flag, x, y) => {
-                this._handleAsteroidBurn(flag, x, y);
-            };
+            if (this.isFinalMode) {
+                this.spaceTheme.setAsteroidsDisabled(true);
+                this.spaceTheme.onFlagBurned = null;
+            } else {
+                this.spaceTheme.setAsteroidsDisabled(false);
+                this.spaceTheme.onFlagBurned = (flag, x, y) => {
+                    this._handleAsteroidBurn(flag, x, y);
+                };
+            }
             // Give SpaceTheme access to audio so it can play swoosh / hit sounds
             this.spaceTheme.audio = this.audio;
             this.spaceTheme.notifyPlaying();
@@ -902,20 +1156,23 @@ export default class Game {
             return;
         }
 
-        // Keep confetti alive + raining during champion screen
+        // Keep confetti alive during champion screen (no looping battle/celebration BGM)
         if (this.gameState === "GRAND_CHAMPION") {
+            // Ensure post-countdown battle track cannot keep playing
+            if (!this._champBgmKilled) {
+                this._champBgmKilled = true;
+                try { this.audio.stopBGM(); } catch (_) {}
+            }
             this.confetti.update();
             this._champConfettiTick = (this._champConfettiTick || 0) + 1;
-            // Soft sparse rain — slower interval, fewer smaller pieces
-            if (this._champConfettiTick % 36 === 0) {
+            // Soft visual rain only — stop after ~8s so it settles
+            if (this._champConfettiTick < 480 && this._champConfettiTick % 36 === 0) {
                 this.confetti.rain(this._lw, 6, { alphaScale: 0.5 });
             }
-            // Occasional clap/confetti burst for celebration feel
-            if (this._champConfettiTick % 90 === 0) {
-                this.audio.playConfetti();
-            }
-            if (this._champConfettiTick % 150 === 0) {
-                this.audio.playClap();
+            // One short celebration window only (~3s), then silence
+            if (this._champConfettiTick < 180) {
+                if (this._champConfettiTick === 90) this.audio.playConfetti();
+                if (this._champConfettiTick === 150) this.audio.playClap();
             }
             return;
         }
@@ -933,6 +1190,11 @@ export default class Game {
         const evenFrame = (this._frame % 2) === 0;
 
         if (state === "NEXT_EVENT") {
+            // Long-battle Grand Final handoff: wait for explicit _beginNextEvent only
+            if (this._lbGrandFinalPending || this._champPermanent) {
+                this.confetti.update();
+                return;
+            }
             this.nextEventTimer++;
             this.trayLauncher.update();
             if (this.trayLauncher.finished || this.nextEventTimer >= this.nextEventDuration) {
@@ -1181,11 +1443,11 @@ export default class Game {
 
         if (remaining === 0) {
             // All finalists gone in one wave — crown last primary as champion
-            // (better than infinite empty-arena stuck state)
             this._elimFlashQueue = [];
             this._finalElimActive = null;
             this._finalElimPhase = null;
             this._finalElimFreeze = false;
+            try { this.audio.stopBGM(); } catch (_) {}
             if (primary.country) {
                 this._triggerGrandChampion(primary.country);
             } else {
@@ -1199,6 +1461,8 @@ export default class Game {
             this._finalElimActive = null;
             this._finalElimPhase = null;
             this._finalElimFreeze = false;
+            // Kill post-countdown battle BGM the instant the final is decided
+            try { this.audio.stopBGM(); } catch (_) {}
             this._triggerGrandChampion(this._finalists[0].country);
             return;
         }
@@ -1373,25 +1637,77 @@ export default class Game {
         this._grandChampion      = country;
         this.gameState           = "GRAND_CHAMPION";
         this._champDisplayStart  = Date.now();
-        this._champCountdownRemain = this._champCountdownSec;
         this._champConfettiTick  = 0;
 
-        this._clearAllFlags();
-        this.eventManager.end(this._eventCtx());
+        // Permanent hold for 5H Grand Final; timed hold for other modes
+        const permanent =
+            !!(this.isLongBattleMode || this.sessionMode?.inGrandFinal);
+        this._champPermanent = permanent;
+        this._lbGrandFinalPending = false;
+        this._clearRestartTimer();
+        this._champBgmKilled = false;
+        this._champCountdownRemain = permanent ? 0 : this._champCountdownSec;
 
-        // Continuous rain of confetti from the top + celebration audio
+        // Stop final/elim paths so we never fall back into an empty Last Standing arena
+        this.isFinalMode = false;
+        this._finalElimFreeze = false;
+        this._finalElimActive = null;
+        this._finalElimPhase = null;
+        this._elimFlashQueue = [];
+        this._emptyArenaSince = 0;
+        this._finalists = [];
+        this._finalEliminated = [];
+        if (this.sessionMode) {
+            this.sessionMode.ended = true;
+            this.sessionMode.inGrandFinal = true;
+        }
+        // Cancel any pending next-round timers
+        if (this.restartTimer) {
+            clearTimeout(this.restartTimer);
+            this.restartTimer = null;
+        }
+
+        this._clearAllFlags();
+        try { this.eventManager.end(this._eventCtx()); } catch (_) {}
+        try { this.trayLauncher.cancel(); } catch (_) {}
+        if (this.eliminationManager) {
+            this.eliminationManager.eliminated = [];
+            this.eliminationManager._lastBatchSize = 0;
+        }
+
+        // Stop looping post-countdown battle BGM (qualify / elimination track)
+        try { this.audio.stopBGM(); } catch (_) {}
+
+        // Celebration: short one-shot sounds only (battle BGM stays OFF)
         this.confetti.start(this._lw / 2, this._lh * 0.08, 220, { fromTop: true });
-        this.audio.playPhase('champion');
+        this.audio.playPhase('champion', { loop: false });
         this.audio.playWinner();
         this.audio.playClap();
         this.audio.playConfetti();
-        if (country?.name) this.audio.speak(`${country.name} is the Grand Final Champion!`);
+        if (country?.name) {
+            const label = permanent
+                ? "5 Hour Championship champion"
+                : "Grand Final Champion";
+            this.audio.speak(`${country.name} is the ${label}!`);
+        }
 
+        if (this._champCountdownTimer) {
+            clearInterval(this._champCountdownTimer);
+            this._champCountdownTimer = null;
+        }
+
+        // 5H Grand Final: stay on this screen forever — no next event / no auto reset
+        if (permanent) {
+            return;
+        }
+
+        // Other modes: countdown then home
         this._champCountdownTimer = setInterval(() => {
             this._champCountdownRemain--;
             if (this._champCountdownRemain <= 0) {
                 clearInterval(this._champCountdownTimer);
                 this._champCountdownTimer = null;
+                try { this.audio.stopBGM(); } catch (_) {}
                 this._doReset();
             }
         }, 1000);
@@ -1440,6 +1756,11 @@ export default class Game {
             this.layout.lbX, this.layout.lbY, this.layout.lbW,
             this.layout.lbRowH, this.layout.lbRowCount
         );
+
+        // Long Battle: flash segment winners below leaderboard
+        if (this.isLongBattleMode) {
+            this._drawLongBattleSegmentStrip(ctx);
+        }
 
         // Asteroid eliminations strip — just below the leaderboard
         if (this.theme?.stars && this._asteroidElimMsg) {
@@ -1634,46 +1955,235 @@ export default class Game {
         ctx.restore();
     }
 
+    /**
+     * Flash strip below leaderboard for 5H segment winners.
+     * Shows recent round winners with a soft pulse; rotates randomly.
+     */
+    _drawLongBattleSegmentStrip(ctx) {
+        const mode = this.sessionMode;
+        if (!mode) return;
+
+        // Prune expired flash queue entries
+        const now = Date.now();
+        this._lbSegmentFlashQueue = (this._lbSegmentFlashQueue || []).filter(
+            e => e.showUntil > now
+        );
+
+        const winners = mode.segmentWinners || [];
+        if (!winners.length && !this._lbSegmentFlashQueue.length) return;
+
+        // Random occasional re-flash of a past segment winner
+        if (!this._lbSegFlashNextAt) this._lbSegFlashNextAt = now + 6000 + Math.random() * 10000;
+        if (now >= this._lbSegFlashNextAt && winners.length) {
+            const pick = winners[Math.floor(Math.random() * winners.length)];
+            this._lbSegmentFlashQueue.push({
+                ...pick,
+                showUntil: now + 8000 + Math.random() * 5000,
+            });
+            this._lbSegFlashNextAt = now + 8000 + Math.random() * 15000;
+        }
+
+        // Prefer active flash queue; fall back to latest segment winner briefly
+        let showList = this._lbSegmentFlashQueue.slice(-3);
+        if (!showList.length && mode.lastSegmentWinner &&
+            now - (mode.lastSegmentWinnerAt || 0) < 14000) {
+            showList = [mode.lastSegmentWinner];
+        }
+        if (!showList.length) return;
+
+        const lbBottom = this.layout.lbY + this.layout.lbZoneH;
+        const stripH = Math.max(24, Math.round(this.layout.lbRowH * 1.05));
+        const y = lbBottom + 3;
+        const x = this.layout.lbX;
+        const w = this.layout.lbW;
+
+        // Pulse alpha
+        const pulse = 0.75 + 0.25 * Math.sin(now / 280);
+
+        ctx.save();
+        ctx.globalAlpha = pulse;
+
+        // Purple glass panel matching 5H theme
+        const grad = ctx.createLinearGradient(x, y, x + w, y + stripH);
+        grad.addColorStop(0, "rgba(40, 24, 72, 0.94)");
+        grad.addColorStop(1, "rgba(22, 14, 48, 0.94)");
+        ctx.fillStyle = grad;
+        if (typeof ctx.roundRect === "function") {
+            ctx.beginPath();
+            ctx.roundRect(x, y, w, stripH, 7);
+            ctx.fill();
+        } else {
+            ctx.fillRect(x, y, w, stripH);
+        }
+        ctx.strokeStyle = "rgba(167, 139, 250, 0.65)";
+        ctx.lineWidth = 1.2;
+        if (typeof ctx.roundRect === "function") {
+            ctx.beginPath();
+            ctx.roundRect(x, y, w, stripH, 7);
+            ctx.stroke();
+        } else {
+            ctx.strokeRect(x, y, w, stripH);
+        }
+
+        const fs = Math.max(9, Math.round(stripH * 0.40));
+        ctx.font = gf(700, fs);
+        ctx.fillStyle = "#C4B5FD";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        const label = "🏅 ROUND WINNERS";
+        ctx.fillText(label, x + 8, y + stripH / 2);
+        let cursor = x + 8 + ctx.measureText(label).width + 10;
+
+        const flagH = Math.max(11, stripH - 8);
+        const flagW = Math.round(flagH * 1.5);
+        const nameFs = Math.max(8, Math.round(flagH * 0.52));
+        ctx.font = gf(600, nameFs);
+        ctx.fillStyle = "#F4F7FF";
+        const maxX = x + w - 8;
+
+        for (const entry of showList) {
+            if (cursor + flagW + 4 > maxX) break;
+            const img = entry.image;
+            const nm = entry.name || "";
+            const fy = y + (stripH - flagH) / 2;
+
+            if (img && img.complete && img.naturalWidth > 0) {
+                ctx.save();
+                ctx.beginPath();
+                if (typeof ctx.roundRect === "function") {
+                    ctx.roundRect(cursor, fy, flagW, flagH, 2);
+                } else {
+                    ctx.rect(cursor, fy, flagW, flagH);
+                }
+                ctx.clip();
+                ctx.drawImage(img, cursor, fy, flagW, flagH);
+                ctx.restore();
+                ctx.strokeStyle = "rgba(167,139,250,0.8)";
+                ctx.lineWidth = 1;
+                ctx.strokeRect(cursor, fy, flagW, flagH);
+            } else {
+                ctx.fillStyle = "#2A2040";
+                ctx.fillRect(cursor, fy, flagW, flagH);
+                ctx.fillStyle = "#F4F7FF";
+            }
+            cursor += flagW + 4;
+
+            const tag = entry.segment ? `R${entry.segment}` : "";
+            const text = tag ? `${tag} ${nm}` : nm;
+            const nmW = ctx.measureText(text).width;
+            if (cursor + nmW + 8 <= maxX) {
+                ctx.fillText(text, cursor, y + stripH / 2);
+                cursor += nmW + 12;
+            }
+        }
+
+        ctx.restore();
+    }
+
     _drawCentralOverlay(ctx) {
         if (this.gameState === "START_SCREEN") return;
-        const cx     = this.layout.arenaX;
-        const aboveY = this.layout.arenaY - this.layout.arenaRadius - 10;
-        ctx.save();
-        ctx.textAlign    = "center";
-        ctx.textBaseline = "bottom";
-        ctx.shadowColor  = "rgba(0,0,0,0.75)";
-        ctx.shadowBlur   = 6;
-        const labelSize = Math.min(this._lw * 0.030, 13);
-        ctx.font = gf(700, labelSize);
 
+        const cx = this.layout.arenaX;
+        // Keep label above the ring but never under the top chrome / off-screen
+        const minY = Math.max(18, (this.layout.headerBottom ?? 0) + 14);
+        let aboveY = this.layout.arenaY - this.layout.arenaRadius - 10;
+        if (aboveY < minY) aboveY = minY;
+
+        // Max width: stay inside the canvas with side margins (leaderboard / edges)
+        const sidePad = Math.max(12, this._lw * 0.04);
+        const maxW = Math.max(80, this._lw - sidePad * 2);
+
+        const narrow = this._lw < 420;
+        const medium = this._lw < 720;
+
+        let line = "";
         if (this.isFinalMode) {
-            // Match reference stream branding + dedicated event name
-            ctx.fillStyle = "#91A7C9";
-            ctx.fillText(
-                `LAST FLAG STANDING  ·  LAST STANDING  ·  ${this._finalists.length} FLAGS`,
-                cx, aboveY
-            );
+            const n = this._finalists?.length ?? 0;
+            line = narrow
+                ? `ELIM  ·  ${n} FLAGS`
+                : (medium
+                    ? `ELIMINATION  ·  EARTHQUAKE  ·  ${n} FLAGS`
+                    : `ELIMINATION  ·  EARTHQUAKE  ·  ${n} FLAGS`);
         } else if (this.sessionStartTime > 0) {
             const elapsed   = Date.now() - this.sessionStartTime;
             const remaining = Math.max(0, this.QUALIFY_DURATION_MS - elapsed);
             const mins = Math.floor(remaining / 60000);
             const secs = Math.floor((remaining % 60000) / 1000);
-            ctx.fillStyle = "#91A7C9";
-            if (this.isHighestWinsMode) {
+            const clock = `${mins}:${secs.toString().padStart(2, "0")}`;
+
+            if (this.isLongBattleMode) {
+                const mode = this.sessionMode;
+                const segRem = mode?.remainingSegmentMs?.() ?? remaining;
+                const sm = Math.floor(segRem / 60000);
+                const ss = Math.floor((segRem % 60000) / 1000);
+                const segClock = `${sm}:${ss.toString().padStart(2, "0")}`;
+                const sessRem = mode?.remainingSessionMs?.() ?? 0;
+                const hm = Math.floor(sessRem / 3600000);
+                const mm = Math.floor((sessRem % 3600000) / 60000);
                 const top = this.winnerManager.getLeaderboard()[0];
-                const topLabel = top ? `${top.name} ${top.wins}W` : "—";
-                ctx.fillText(
-                    `HIGHEST WINNER WINS  ·  ${mins}:${secs.toString().padStart(2,"0")}  ·  R${this.roundNumber}  ·  LEAD ${topLabel}`,
-                    cx, aboveY
-                );
+                const topLabel = top
+                    ? (narrow ? `${(top.name || "").slice(0, 10)} ${top.wins}W` : `${top.name} ${top.wins}W`)
+                    : "—";
+                const segLabel = mode?.getSegmentLabel?.() ?? "";
+                if (mode?.inGrandFinal) {
+                    const n = this._finalists?.length ?? 0;
+                    line = narrow
+                        ? `GRAND FINAL  ·  ${n}`
+                        : `GRAND FINAL  ·  ${n} FLAGS  ·  EARTHQUAKE`;
+                } else if (narrow) {
+                    line = `${segLabel}  ${segClock}  ·  ${topLabel}`;
+                } else if (medium) {
+                    line = `5H ${segLabel}  ·  ${segClock}  ·  ${hm}h${String(mm).padStart(2, "0")}m  ·  ${topLabel}`;
+                } else {
+                    line = `5H  ·  ${segLabel}  ·  ROUND ${segClock}  ·  TOTAL ${hm}h${String(mm).padStart(2, "0")}m  ·  LEAD ${topLabel}`;
+                }
+            } else if (this.isHighestWinsMode) {
+                const top = this.winnerManager.getLeaderboard()[0];
+                const topLabel = top
+                    ? (narrow ? `${(top.name || "").slice(0, 10)} ${top.wins}W` : `${top.name} ${top.wins}W`)
+                    : "—";
+                line = narrow
+                    ? `HW  ·  ${clock}  ·  R${this.roundNumber}`
+                    : (medium
+                        ? `HIGHEST WINS  ·  ${clock}  ·  R${this.roundNumber}  ·  ${topLabel}`
+                        : `HIGHEST WINNER WINS  ·  ${clock}  ·  R${this.roundNumber}  ·  LEAD ${topLabel}`);
             } else {
-                const winnersCount = this._qualifyWinners.length;
-                ctx.fillText(
-                    `${this.totalCountries}-COUNTRY FLAGS BATTLE  ·  ${mins}:${secs.toString().padStart(2,"0")}  ·  R${this.roundNumber}  ·  ${winnersCount} Q`,
-                    cx, aboveY
-                );
+                const winnersCount = this._qualifyWinners?.length ?? 0;
+                line = narrow
+                    ? `${this.totalCountries} FLAGS  ·  ${clock}  ·  R${this.roundNumber}`
+                    : (medium
+                        ? `${this.totalCountries}-COUNTRY  ·  ${clock}  ·  R${this.roundNumber}  ·  ${winnersCount} Q`
+                        : `${this.totalCountries}-COUNTRY FLAGS BATTLE  ·  ${clock}  ·  R${this.roundNumber}  ·  ${winnersCount} Q`);
             }
         }
+
+        if (!line) return;
+
+        ctx.save();
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        ctx.shadowColor = "rgba(0,0,0,0.75)";
+        ctx.shadowBlur = 6;
+        ctx.fillStyle = "#91A7C9";
+
+        // Fit font to available width
+        let size = Math.min(this._lw * 0.032, 14);
+        const minSize = Math.max(9, this._lw * 0.018);
+        ctx.font = gf(700, size);
+        while (size > minSize && ctx.measureText(line).width > maxW) {
+            size -= 0.5;
+            ctx.font = gf(700, size);
+        }
+        // If still too wide at min size, ellipsize
+        if (ctx.measureText(line).width > maxW) {
+            let s = line;
+            while (s.length > 4 && ctx.measureText(s + "…").width > maxW) {
+                s = s.slice(0, -1);
+            }
+            line = s + "…";
+        }
+
+        ctx.fillText(line, cx, aboveY);
         ctx.restore();
     }
 
@@ -1800,6 +2310,8 @@ export default class Game {
         ctx.fillText(
             this.isFinalMode
                 ? "LAST FLAG STANDING"
+                : this.isLongBattleMode
+                    ? "5H CHAMPIONSHIP"
                 : this.isHighestWinsMode
                     ? "HIGHEST WINNER WINS"
                     : `${this.totalCountries}-COUNTRY FLAGS BATTLE`,
@@ -2393,11 +2905,14 @@ export default class Game {
         ctx.fillText("🏆", ax, y);
         y += trophySize + gap * 0.5;
 
-        // TIME UP — CHAMPION
+        // Title: 5H Grand Final vs generic Time-Up champion
         ctx.font = gf(900, titleSize);
         ctx.fillStyle = "#FFC83D";
         ctx.shadowBlur = 12;
-        ctx.fillText("TIME UP  —  CHAMPION", ax, y);
+        const champTitle = (this.sessionMode && this.sessionMode.inGrandFinal) || this._currentEventId === "long_battle"
+            ? "5H GRAND FINAL CHAMPION"
+            : "TIME UP  —  CHAMPION";
+        ctx.fillText(champTitle, ax, y);
         y += titleSize + gap;
 
         // Flag card
@@ -2455,14 +2970,18 @@ export default class Game {
         ctx.fillText("1 WIN", ax, y);
         y += winSize + gap * 0.9;
 
-        // NEXT TOURNAMENT IN MM:SS
-        const mins  = Math.floor(this._champCountdownRemain / 60);
-        const secs  = this._champCountdownRemain % 60;
-        const cdStr = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+        // Countdown / permanent label
         ctx.font = gf(700, cdSize);
         ctx.fillStyle = "#91A7C9";
         ctx.shadowBlur = 6;
-        ctx.fillText(`NEXT TOURNAMENT IN  ${cdStr}`, ax, y);
+        if (this._champPermanent) {
+            ctx.fillText("FINAL RESULT  ·  NO NEXT ROUND", ax, y);
+        } else {
+            const mins  = Math.floor(this._champCountdownRemain / 60);
+            const secs  = this._champCountdownRemain % 60;
+            const cdStr = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+            ctx.fillText(`NEXT TOURNAMENT IN  ${cdStr}`, ax, y);
+        }
 
         ctx.restore();
     }
