@@ -81,7 +81,7 @@ export default class Game {
         this.gameState             = "START_SCREEN";
         this.theme                 = THEMES[DEFAULT_THEME];
         this.winnerDisplayTime     = 0;
-        this.winnerDisplayDuration = 3500;
+        this.winnerDisplayDuration = 3500; // classic short display; 5H segment uses ROUND_WINNER_DISPLAY_MS
 
         // ── Qualifying session ────────────────────────────────────────────
         this.QUALIFY_DURATION_MS = 40 * 60 * 1000;
@@ -107,6 +107,7 @@ export default class Game {
         this._champCountdownTimer  = null;
         this._champCountdownRemain = 120;
         this._champPermanent       = false;
+        this._champHwRound         = false;
         this._lbGrandFinalPending  = false;
 
         this.nextEventTimer    = 0;
@@ -147,6 +148,11 @@ export default class Game {
         // Final-mode stalemate clock (mirrors WinnerManager qualifying logic)
         this._finalStalemateSince = 0;
         this._emptyArenaSince     = 0;
+
+        // Winner screen timer — tracks when restartTimer will fire so the
+        // countdown pill in WinnerRenderer can show live seconds remaining.
+        this._winnerTimerEndsAt = null;
+        this._winnerShowTick    = 0;
 
         // ── Highest Winner Wins — sudden death tiebreaker ─────────────────
         this._hwSuddenDeathActive   = false;
@@ -341,6 +347,7 @@ export default class Game {
 
         this.gameState         = "WINNER_SHOW";
         this.winnerDisplayTime = Date.now();
+        this._winnerShowTick   = 0;  // reset so clap/confetti audio fires fresh
 
         if (this.theme?.stars) this.spaceTheme.notifyNotPlaying();
         this.eventManager.end(this._eventCtx());
@@ -370,36 +377,62 @@ export default class Game {
                 // Tied again — replay sudden death with the same countries
                 const names = (winner.countries ?? []).map(c => c.name).join(" and ");
                 if (names) this.audio.speak(`${names} still tied — replaying sudden death!`);
+                this._winnerTimerEndsAt = Date.now() + this.winnerDisplayDuration;
                 this.restartTimer = setTimeout(() => {
                     this.restartTimer = null;
+                    this._winnerTimerEndsAt = null;
                     this._enterHWSuddenDeath(
                         this._hwSuddenDeathFlags,
                         this._hwSuddenDeathWins
                     );
                 }, this.winnerDisplayDuration);
             } else {
-                // We have a single sudden death winner — crown them champion
+                // Single sudden death winner = ROUND winner for this 40-min window
                 const country = winner.country;
                 this._hwSuddenDeathActive = false;
-                this._grandChampion       = country;
-                this._champDisplayStart   = Date.now();
-                this._champCountdownRemain = this._champCountdownSec;
-                this.gameState = "GRAND_CHAMPION";
-                this.audio.playPhase('champion');
-                this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
-                this.audio.playWinner();
-                this.audio.speak(
-                    `${country.name} wins the sudden death and is the Highest Winner Champion!`
-                );
-                if (this._champCountdownTimer) clearInterval(this._champCountdownTimer);
-                this._champCountdownTimer = setInterval(() => {
-                    this._champCountdownRemain--;
-                    if (this._champCountdownRemain <= 0) {
-                        clearInterval(this._champCountdownTimer);
-                        this._champCountdownTimer = null;
-                        this._doReset();
-                    }
-                }, 1000);
+
+                // Record as segment winner, reset board for next 40-min (same as clear winner path)
+                if (this.isHighestWinsMode && this.sessionMode) {
+                    const wins = this._hwSuddenDeathWins || 1;
+                    this.sessionMode.lastSegmentWinner = {
+                        code: country.code,
+                        name: country.name,
+                        image: country.image,
+                        wins: country.wins || wins,
+                        segment: (this.sessionMode.segmentIndex || 0) + 1,
+                    };
+                    this.sessionMode.segmentIndex = (this.sessionMode.segmentIndex || 0) + 1;
+                    this.sessionMode.tiedCountries = [];
+                    this.sessionMode.sessionStartTime = Date.now();
+                    this.sessionStartTime = this.sessionMode.sessionStartTime;
+                    this.QUALIFY_DURATION_MS = this.sessionMode.constructor.DURATION_MS
+                        || (40 * 60 * 1000);
+                    this.winnerManager.clearWins();
+                    this.leaderboardRenderer?.reset();
+                    // Full-screen TIME UP for the sudden-death winner, then next round
+                    this._showHighestWinsRoundWinner();
+                } else {
+                    // Fallback (should not hit in continuous HW)
+                    this._grandChampion = country;
+                    this._champDisplayStart = Date.now();
+                    this._champCountdownRemain = this._champCountdownSec;
+                    this.gameState = "GRAND_CHAMPION";
+                    this.audio.playPhase("champion");
+                    this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
+                    this.audio.playWinner();
+                    this.audio.speak(
+                        `${country.name} wins the sudden death and is the Highest Winner Champion!`
+                    );
+                    if (this._champCountdownTimer) clearInterval(this._champCountdownTimer);
+                    this._champCountdownTimer = setInterval(() => {
+                        this._champCountdownRemain--;
+                        if (this._champCountdownRemain <= 0) {
+                            clearInterval(this._champCountdownTimer);
+                            this._champCountdownTimer = null;
+                            this._doReset();
+                        }
+                    }, 1000);
+                }
             }
             return;
         }
@@ -407,10 +440,21 @@ export default class Game {
         // ── Mode-specific session end ─────────────────────────────────────
         if (this.isHighestWinsMode) {
             const result = this.sessionMode.onRoundComplete(winner);
-            if (result === "end") {
-                this._endHighestWinsSession();
+            if (result === "sudden_death") {
+                // 2+ countries share the top win count at 40-min end → sudden death
+                const tied = this.sessionMode.tiedCountries || [];
+                const sharedWins = tied[0]?.wins
+                    ?? this.winnerManager.getLeaderboard()[0]?.wins
+                    ?? 0;
+                this._enterHWSuddenDeath(tied, sharedWins);
                 return;
             }
+            if (result === "segment_end") {
+                // Clear winner — full-screen TIME UP, then next 40-min round
+                this._showHighestWinsRoundWinner();
+                return;
+            }
+            // Still time left — fall through to continue arena rounds
         } else if (this.isLongBattleMode) {
             const result = this.sessionMode.onRoundComplete(winner);
             if (result === "grand_final") {
@@ -438,7 +482,98 @@ export default class Game {
         else this.eventManager.pick();
 
         const displayDuration = (isTie && winner.isSilent) ? 500 : this.winnerDisplayDuration;
-        this.restartTimer = setTimeout(() => this._beginNextEvent(), displayDuration);
+        this._winnerTimerEndsAt = Date.now() + displayDuration;
+        this.restartTimer = setTimeout(() => { this._winnerTimerEndsAt = null; this._beginNextEvent(); }, displayDuration);
+    }
+
+
+    /**
+     * Highest Winner Wins only: end of a 40-min window.
+     * Full-screen TIME UP — CHAMPION (no leaderboard / tray), continuous confetti + winner BGM,
+     * then next 40-min round. Does not touch Qualifier or 5H.
+     */
+    _showHighestWinsRoundWinner() {
+        const mode = this.sessionMode;
+        // Safety: if top score is still tied, force sudden death instead
+        if (mode && typeof mode._getTopTied === "function") {
+            const tied = mode._getTopTied();
+            if (tied.length >= 2) {
+                mode.tiedCountries = tied;
+                this._enterHWSuddenDeath(tied, tied[0].wins);
+                return;
+            }
+        }
+        const w = mode?.lastSegmentWinner;
+
+        this._clearRestartTimer();
+        if (this._champCountdownTimer) {
+            clearInterval(this._champCountdownTimer);
+            this._champCountdownTimer = null;
+        }
+
+        if (this.theme?.stars) this.spaceTheme.notifyNotPlaying();
+        try { this.eventManager.end(this._eventCtx()); } catch (_) {}
+        try { this._clearAllFlags(); } catch (_) {}
+        try { this.trayLauncher.cancel(); } catch (_) {}
+
+        const holdMs = (typeof mode?.constructor?.ROUND_WINNER_DISPLAY_MS === "number")
+            ? mode.constructor.ROUND_WINNER_DISPLAY_MS
+            : 60 * 1000;
+
+        // Full-screen champion presentation (same visual language as classic TIME UP)
+        this._champHwRound = true;       // marks temporary HW round champion (not 5H permanent)
+        this._champPermanent = false;
+        this._champBgmKilled = false;
+        this._champConfettiTick = 0;
+        this._champDisplayStart = Date.now();
+        this._champCountdownRemain = Math.ceil(holdMs / 1000);
+        this.isFinalMode = false;
+
+        if (w) {
+            this._grandChampion = {
+                code: w.code,
+                name: w.name,
+                image: w.image,
+                wins: w.wins || 1,
+            };
+        } else {
+            const lb = this.winnerManager.getLeaderboard();
+            const top = lb[0];
+            this._grandChampion = top
+                ? { code: top.code, name: top.name, image: top.image, wins: top.wins || 1 }
+                : { code: "??", name: "NO WINNER", image: null, wins: 0 };
+        }
+
+        this.gameState = "GRAND_CHAMPION";
+
+        // Continuous confetti + looping winner/celebration audio for the whole hold
+        this.confetti.start(this._lw / 2, this._lh * 0.08, 220, { fromTop: true });
+        try { this.audio.stopBGM(); } catch (_) {}
+        try { this.audio.playPhase("champion", { loop: true }); } catch (_) {}
+        try { this.audio.playWinner(); } catch (_) {}
+        try { this.audio.playClap(); } catch (_) {}
+        try { this.audio.playConfetti(); } catch (_) {}
+        try {
+            const nm = this._grandChampion?.name || "Champion";
+            const wins = this._grandChampion?.wins || 1;
+            this.audio.speak(
+                `Time is up! ${nm} is the highest winner with ${wins} win${wins === 1 ? "" : "s"}!`
+            );
+        } catch (_) {}
+
+        // Tick countdown label; after hold → next 40-min round
+        this._champCountdownTimer = setInterval(() => {
+            this._champCountdownRemain--;
+            if (this._champCountdownRemain <= 0) {
+                clearInterval(this._champCountdownTimer);
+                this._champCountdownTimer = null;
+                this._champHwRound = false;
+                try { this.audio.stopBGM(); } catch (_) {}
+                this._grandChampion = null;
+                this.gameState = "NEXT_EVENT";
+                this._beginNextEvent();
+            }
+        }, 1000);
     }
 
     /** End Highest Winner Wins session — champion = most wins, no final. */
@@ -496,13 +631,39 @@ export default class Game {
     _showLongBattleSegmentWinner() {
         const mode = this.sessionMode;
         const w = mode?.lastSegmentWinner;
-        this.gameState = "WINNER_SHOW";
+
+        // ── Build a winner object the WinnerRenderer can display ─────────────
+        // winnerManager.winner is what WINNER_SHOW draws. It must have a
+        // .country sub-object with { name, image } — same shape as a Flag.
+        // We also tag it so draw() can show "ROUND N WINNER" instead of
+        // the generic "ROUND WINNER" label.
+        if (w) {
+            this.winnerManager.winner = {
+                country: {
+                    code : w.code,
+                    name : w.name,
+                    image: w.image,
+                },
+                _isSegmentWinner : true,
+                _segmentNumber   : w.segment,
+                _segmentWins     : w.wins,
+            };
+        }
+        // If no segment winner data (0 wins recorded), leave winnerManager.winner
+        // as whatever it was so the screen is not blank.
+
+        this.gameState         = "WINNER_SHOW";
         this.winnerDisplayTime = Date.now();
+        this._winnerShowTick   = 0;  // reset so clap/confetti audio fires fresh
 
         // ~1 minute on production (5s in FAST test) before next 40-min round
         const holdMs = (typeof mode?.constructor?.ROUND_WINNER_DISPLAY_MS === "number")
             ? mode.constructor.ROUND_WINNER_DISPLAY_MS
             : 60 * 1000;
+
+        // Stop battle BGM, start looping winner BGM for the 1-minute display
+        try { this.audio.stopBGM(); } catch (_) {}
+        try { this.audio.playPhase('champion', { loop: true }); } catch (_) {}
 
         if (w) {
             this.confetti.start(this._lw / 2, this._lh * 0.36, 120);
@@ -519,10 +680,16 @@ export default class Game {
         }
 
         const nextSeg = (mode?.segmentIndex ?? 0) + 1;
+        this._winnerTimerEndsAt = Date.now() + holdMs;
         this.restartTimer = setTimeout(() => {
             this.restartTimer = null;
+            this._winnerTimerEndsAt = null;
+            // Restore battle BGM now that the 1-minute winner display is over
             if (mode && !mode.inGrandFinal) {
+                try { this.audio.playPhase('qualify'); } catch (_) {}
                 this.audio.speak(`Round ${nextSeg} begins now!`);
+            } else {
+                try { this.audio.playPhase('elimination'); } catch (_) {}
             }
             this._beginNextEvent();
         }, holdMs);
@@ -689,12 +856,17 @@ export default class Game {
         this._suddenDeathBannerStart = Date.now();
         this._suddenDeathBannerDuration = 3800; // ms to display the banner
 
-        // Announcement
-        const names = tiedCountries.map(c => c.name).join(", ");
+        // Announcement — no country names (keeps VO short)
         this.audio.playRoundStart();
+        const n = tiedCountries.length;
         this.audio.speak(
-            `It's a tie! ${tiedCountries.length} countries are level on ${topWins} win${topWins === 1 ? "" : "s"}: ${names}. Sudden death!`
+            `It's a tie on ${topWins} win${topWins === 1 ? "" : "s"}! `
+            + `${n} countr${n === 1 ? "y" : "ies"} will participate in sudden death!`
         );
+
+        // No asteroids in Highest Wins sudden death
+        try { this.spaceTheme?.setAsteroidsDisabled?.(true); } catch (_) {}
+        if (this.spaceTheme) this.spaceTheme.onFlagBurned = null;
 
         // Pre-load spawn positions for the tied countries so _beginNextEvent
         // can run immediately after the banner
@@ -896,6 +1068,11 @@ export default class Game {
         this._finalStalemateSince = 0;
         this._emptyArenaSince     = 0;
 
+        // Winner screen state reset
+        this._winnerTimerEndsAt = null;
+        this._winnerShowTick    = 0;
+        this._champBgmKilled    = false;
+
         // Sudden death tiebreaker reset
         this._hwSuddenDeathActive = false;
         this._hwSuddenDeathFlags  = [];
@@ -1041,9 +1218,9 @@ export default class Game {
         // Reset asteroid elimination tracking for this round
         this._asteroidElimMsg = null;
 
-        // Elimination / Grand Final: NEVER allow asteroids (empty-arena softlock)
+        // Elimination / Grand Final / HW sudden death: never allow asteroids
         if (this.theme?.stars) {
-            if (this.isFinalMode) {
+            if (this.isFinalMode || this._hwSuddenDeathActive) {
                 this.spaceTheme.setAsteroidsDisabled(true);
                 this.spaceTheme.onFlagBurned = null;
             } else {
@@ -1156,23 +1333,59 @@ export default class Game {
             return;
         }
 
-        // Keep confetti alive during champion screen (no looping battle/celebration BGM)
+        // Keep confetti alive during champion screen
         if (this.gameState === "GRAND_CHAMPION") {
-            // Ensure post-countdown battle track cannot keep playing
+            this.confetti.update();
+            this._champConfettiTick = (this._champConfettiTick || 0) + 1;
+
+            // Highest Wins 40-min ROUND winner: continuous confetti + celebration SFX
+            if (this._champHwRound) {
+                if (this._champConfettiTick % 24 === 0) {
+                    this.confetti.rain(this._lw, 8, { alphaScale: 0.75 });
+                }
+                if (this._champConfettiTick % 90 === 0) {
+                    try { this.audio.playClap(); } catch (_) {}
+                }
+                if (this._champConfettiTick % 120 === 0) {
+                    try { this.audio.playConfetti(); } catch (_) {}
+                }
+                // Keep champion BGM looping (started in _showHighestWinsRoundWinner)
+                return;
+            }
+
+            // Other champion screens (5H permanent / classic): short celebration then settle
             if (!this._champBgmKilled) {
                 this._champBgmKilled = true;
                 try { this.audio.stopBGM(); } catch (_) {}
             }
-            this.confetti.update();
-            this._champConfettiTick = (this._champConfettiTick || 0) + 1;
-            // Soft visual rain only — stop after ~8s so it settles
             if (this._champConfettiTick < 480 && this._champConfettiTick % 36 === 0) {
                 this.confetti.rain(this._lw, 6, { alphaScale: 0.5 });
             }
-            // One short celebration window only (~3s), then silence
             if (this._champConfettiTick < 180) {
                 if (this._champConfettiTick === 90) this.audio.playConfetti();
                 if (this._champConfettiTick === 150) this.audio.playClap();
+            }
+            return;
+        }
+
+        // ── WINNER_SHOW: block ALL game logic — nothing runs behind the winner screen ──
+        // The restartTimer (set by handleWinner / _showLongBattleSegmentWinner) is the
+        // sole driver of progression. No arena ticking, no nextEventTimer, nothing.
+        if (this.gameState === "WINNER_SHOW") {
+            this.confetti.update();
+            this.fx.update();
+            // Drip extra confetti for the first ~4 s of the winner reveal
+            this._winnerShowTick = (this._winnerShowTick || 0) + 1;
+            if (this._winnerShowTick < 240 && this._winnerShowTick % 18 === 0) {
+                this.confetti.rain(this._lw, 4, { alphaScale: 0.7 });
+            }
+            // Clap + confetti sfx staged across the display (only fires once per show)
+            // Extra SFX only during long round-winner holds (not 3s arena wins)
+            const longHold = this._winnerTimerEndsAt && (this._winnerTimerEndsAt - Date.now()) > 5000;
+            if (longHold) {
+                if (this._winnerShowTick === 72)  { try { this.audio.playClap();     } catch(_){} }
+                if (this._winnerShowTick === 150) { try { this.audio.playConfetti(); } catch(_){} }
+                if (this._winnerShowTick === 210) { try { this.audio.playClap();     } catch(_){} }
             }
             return;
         }
@@ -1846,13 +2059,26 @@ export default class Game {
             const elapsed = Date.now() - this.winnerDisplayTime;
             const animT   = this.gameState === "WINNER_SHOW"
                 ? Math.min(1, elapsed / 450) : 1;
+
+            // Compute seconds remaining until next round starts.
+            // restartTimer is a setTimeout handle — we can't read it directly,
+            // so we store the target time when we set the timer.
+            // Show "NEXT ROUND IN Xs" only for long holds (40-min round winner ~60s).
+            // Hide it on normal ~3.5s arena-win screens (esp. Highest Winner Wins).
+            let secsRemain = null;
+            if (this._winnerTimerEndsAt && this.gameState === "WINNER_SHOW") {
+                const left = Math.max(0, (this._winnerTimerEndsAt - Date.now()) / 1000);
+                if (left > 5) secsRemain = left;
+            }
+
             this.winnerRender.draw(
                 ctx, this.winnerManager.winner,
                 this._lw, this._lh,
                 this.gameState === "COUNTDOWN",
                 animT,
                 this.layout.arenaX, this.layout.arenaY, this.layout.arenaRadius,
-                false, 0
+                false, 0,
+                secsRemain
             );
         }
 
@@ -3069,7 +3295,11 @@ export default class Game {
         const topSize = Math.min(R * 0.085, 17);
         ctx.font = gf(800, topSize);
         ctx.fillStyle = "#FFC83D";
-        ctx.fillText(`TOP 1  ·  ${name || "CHAMPION"}`, ax, ay - R - topSize * 2.2);
+        if (this._champHwRound) {
+            ctx.fillText(`HIGHEST WINNER WINS  ·  ${name || "CHAMPION"}`, ax, ay - R - topSize * 2.2);
+        } else {
+            ctx.fillText(`TOP 1  ·  ${name || "CHAMPION"}`, ax, ay - R - topSize * 2.2);
+        }
 
         // Vertical stack INSIDE the circle (reference stream):
         //   🏆
@@ -3109,9 +3339,12 @@ export default class Game {
         ctx.font = gf(900, titleSize);
         ctx.fillStyle = "#FFC83D";
         ctx.shadowBlur = 0;
-        const champTitle = (this.sessionMode && this.sessionMode.inGrandFinal) || this._currentEventId === "long_battle"
-            ? "5H GRAND FINAL CHAMPION"
-            : "TIME UP  —  CHAMPION";
+        let champTitle = "TIME UP  —  CHAMPION";
+        if (this._champHwRound) {
+            champTitle = "TIME UP  —  CHAMPION";
+        } else if ((this.sessionMode && this.sessionMode.inGrandFinal) || this._currentEventId === "long_battle") {
+            champTitle = "5H GRAND FINAL CHAMPION";
+        }
         ctx.fillText(champTitle, ax, y);
         y += titleSize + gap;
 
@@ -3167,7 +3400,8 @@ export default class Game {
         ctx.font = gf(800, winSize);
         ctx.fillStyle = "#FFC83D";
         ctx.shadowBlur = 0;
-        ctx.fillText("1 WIN", ax, y);
+        const winN = this._grandChampion?.wins ?? 1;
+        ctx.fillText(`${winN} WIN${winN === 1 ? "" : "S"}`, ax, y);
         y += winSize + gap * 0.9;
 
         // Countdown / permanent label
@@ -3176,6 +3410,11 @@ export default class Game {
         ctx.shadowBlur = 0;
         if (this._champPermanent) {
             ctx.fillText("FINAL RESULT  ·  NO NEXT ROUND", ax, y);
+        } else if (this._champHwRound) {
+            const mins  = Math.floor(this._champCountdownRemain / 60);
+            const secs  = this._champCountdownRemain % 60;
+            const cdStr = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+            ctx.fillText(`NEXT ROUND IN  ${cdStr}`, ax, y);
         } else {
             const mins  = Math.floor(this._champCountdownRemain / 60);
             const secs  = this._champCountdownRemain % 60;

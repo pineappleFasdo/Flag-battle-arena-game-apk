@@ -2,10 +2,12 @@
  * HighestWinsMode — separate home-page session mode.
  *
  * Rules:
- *  - 40-minute session of normal arena rounds
+ *  - Repeating 40-minute rounds (no session end — runs until manually stopped)
  *  - Every country stays eligible every round (winners do NOT sit out)
  *  - No Last Standing / Final Mode
- *  - When time is up, the country with the most wins is the session champion
+ *  - When a 40-min round ends, the country with the most wins in that round
+ *    is shown as winner for 1 minute, then the next round starts with a fresh
+ *    leaderboard.
  *
  * Kept fully isolated from classic Qualifier so future home events
  * can be added the same way without touching Game.js qualify paths.
@@ -15,11 +17,20 @@ export default class HighestWinsMode {
     static TITLE = "Highest Winner Wins";
     static DURATION_MS = 40 * 60 * 1000;
 
+    /** How long to show the round winner before the next 40-min round starts. */
+    static ROUND_WINNER_DISPLAY_MS = 60 * 1000; // 1 minute
+
     constructor(game) {
         this.game = game;
         this.sessionStartTime = 0;
         this.ended = false;
         this.champion = null; // { code, name, wins, image }
+
+        // Segment tracking — used by _showLongBattleSegmentWinner in Game.js
+        this.segmentIndex = 0;          // 0-based; incremented after each 40-min round
+        this.lastSegmentWinner = null;  // { code, name, image, wins, segment }
+        this.tiedCountries = [];       // top-score ties → sudden death
+        this.inGrandFinal = false;      // always false for this mode
     }
 
     /** Called once when this mode starts from the home screen. */
@@ -27,6 +38,9 @@ export default class HighestWinsMode {
         this.sessionStartTime = Date.now();
         this.ended = false;
         this.champion = null;
+        this.segmentIndex = 0;
+        this.lastSegmentWinner = null;
+        this.inGrandFinal = false;
         // All countries always eligible — full shuffle each round
         this.game._qualifyPool = this.game._shuffle([...this.game.allCountries]);
         this.game._qualifyWinners = []; // unused in this mode
@@ -54,21 +68,49 @@ export default class HighestWinsMode {
 
     /**
      * After a round win/tie — do NOT remove winner from pool.
-     * If time is up, end the session with highest-wins champion.
-     * @returns {'continue'|'end'}
+     * If the 40-minute clock is up, record the segment winner, reset the
+     * clock for the next round, and return 'segment_end' so Game.js shows
+     * the winner for 1 minute then starts a fresh round automatically.
+     * @returns {'continue'|'segment_end'}
      */
     onRoundComplete(winner) {
-        if (this.ended) return "end";
+        if (this.ended) return "segment_end";
 
         const elapsed = Date.now() - this.sessionStartTime;
         if (elapsed >= HighestWinsMode.DURATION_MS) {
-            this._declareChampion();
-            return "end";
+            // Check for top-score ties BEFORE recording / clearing the board
+            const tied = this._getTopTied();
+            if (tied.length >= 2) {
+                this.tiedCountries = tied;
+                return "sudden_death";
+            }
+            this.tiedCountries = [];
+            this._recordSegmentWinner();
+            return "segment_end";
         }
         return "continue";
     }
 
-    /** True when the 40-minute clock has finished. */
+    /**
+     * Countries sharing the highest win count (2+ means sudden death).
+     * @returns {Array<{code,name,image,wins}>}
+     */
+    _getTopTied() {
+        const lb = this.game.winnerManager.getLeaderboard();
+        if (!lb.length) return [];
+        const topWins = lb[0].wins;
+        if (!topWins || topWins < 1) return [];
+        return lb
+            .filter(e => e.wins === topWins)
+            .map(e => ({
+                code: e.code,
+                name: e.name,
+                image: e.image,
+                wins: e.wins,
+            }));
+    }
+
+    /** True when the current 40-minute round clock has finished. */
     isTimeUp() {
         if (this.ended) return true;
         return Date.now() - this.sessionStartTime >= HighestWinsMode.DURATION_MS;
@@ -76,6 +118,42 @@ export default class HighestWinsMode {
 
     remainingMs() {
         return Math.max(0, HighestWinsMode.DURATION_MS - (Date.now() - this.sessionStartTime));
+    }
+
+    /**
+     * Record the winner of the completed 40-min round, then reset the clock
+     * and leaderboard so the next round starts fresh.
+     */
+    _recordSegmentWinner() {
+        const lb = this.game.winnerManager.getLeaderboard();
+        if (lb.length > 0) {
+            const top = lb[0];
+            this.lastSegmentWinner = {
+                code    : top.code,
+                name    : top.name,
+                image   : top.image,
+                wins    : top.wins,
+                segment : this.segmentIndex + 1,
+            };
+        } else {
+            this.lastSegmentWinner = null;
+        }
+
+        this.segmentIndex += 1;
+
+        // Reset clock and leaderboard for the next 40-min round
+        this.sessionStartTime = Date.now();
+        this.game.sessionStartTime = this.sessionStartTime;
+        this.game.QUALIFY_DURATION_MS = HighestWinsMode.DURATION_MS;
+        this.game.winnerManager.clearWins();
+        this.game.leaderboardRenderer?.reset();
+    }
+
+    /** DEBUG: force the 40-min clock to look like it already expired.
+     *  The next call to onRoundComplete() will return 'segment_end'. */
+    debugExpireSegment() {
+        this.sessionStartTime = Date.now() - HighestWinsMode.DURATION_MS - 1000;
+        this.game.sessionStartTime = this.sessionStartTime;
     }
 
     _declareChampion() {

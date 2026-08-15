@@ -296,19 +296,58 @@ document.getElementById('nr-event-list').addEventListener('click', function (e) 
     }, 380);
 });
 
-// ── DEBUG: 5 rapid taps → instant Final Mode ─────────────────────────────────
+// ── DEBUG: 5 rapid taps → Final Battle (40-min Qualifier ONLY) ───────────────
 // DELETE before public release.
+// 5 rapid taps:
+//   • Highest Winner Wins → end current 40-min round now (round winner → next 40-min)
+//   • 40-Min Qualifier   → Final Battle on next winner
+//   • 5H Championship    → ignored (use Shift+L / Shift+M)
 let _debugTaps = 0, _debugTimer = null;
 canvas.addEventListener('click', function () {
     if (game.gameState !== 'PLAYING' && game.gameState !== 'COUNTDOWN') return;
+    if (game.isLongBattleMode) return; // leave 5H alone
     _debugTaps++;
     clearTimeout(_debugTimer);
     _debugTimer = setTimeout(function () { _debugTaps = 0; }, 1500);
-    if (_debugTaps >= 5) {
-        _debugTaps = 0;
-        game.sessionStartTime = Date.now() - game.QUALIFY_DURATION_MS - 1;
-        console.log('[DEBUG] Final Mode on next winner');
+    if (_debugTaps < 5) return;
+    _debugTaps = 0;
+
+    if (game.isHighestWinsMode) {
+        // Expire 40-min clock and force segment end immediately
+        if (game.sessionMode && typeof game.sessionMode.debugExpireSegment === 'function') {
+            game.sessionMode.debugExpireSegment();
+        } else if (game.sessionMode) {
+            game.sessionMode.sessionStartTime = Date.now() - (game.sessionMode.constructor.DURATION_MS || 40*60*1000) - 1000;
+            game.sessionStartTime = game.sessionMode.sessionStartTime;
+        }
+        // Ensure leaderboard has someone to crown
+        var lb = game.winnerManager.getLeaderboard();
+        if (!lb.length) {
+            var pool = (game.activeCountries && game.activeCountries.length)
+                ? game.activeCountries
+                : (game.allCountries || []);
+            for (var i = 0; i < Math.min(3, pool.length); i++) {
+                var c = pool[i];
+                game.winnerManager._wins[c.code] = {
+                    name: c.name,
+                    imageSrc: (c.image && c.image.src) ? c.image.src : null,
+                    wins: 3 - i,
+                };
+                if (c.image) game.winnerManager._imageCache[c.code] = c.image;
+            }
+            try { game.winnerManager._saveWins(); } catch (_) {}
+        }
+        // Silent force end of current arena → onRoundComplete → segment_end → round winner
+        var fakeWinner = { isTie: true, countries: [], isSilent: true };
+        game.winnerManager.winner = fakeWinner;
+        if (game.winnerManager.onWin) game.winnerManager.onWin(fakeWinner);
+        console.log('[DEBUG] 5-tap: Highest Wins 40-min round ended → ROUND WINNER display');
+        return;
     }
+
+    // 40-Min Qualifier only
+    game.sessionStartTime = Date.now() - game.QUALIFY_DURATION_MS - 1;
+    console.log('[DEBUG] 5-tap: Final Battle on next winner (40-min Qualifier only)');
 });
 
 // ── DEBUG: Keyboard shortcuts ─────────────────────────────────────────────────
@@ -318,7 +357,11 @@ canvas.addEventListener('click', function () {
 //             and start a new round with all 249 flags again.  This lets you
 //             test the pool-exhaustion edge case in seconds instead of 40 mins.
 //
-// Shift+F  →  Skip the qualifier timer so Final Mode triggers on next winner.
+// Shift+F  →  40-MIN QUALIFIER ONLY — expire timer, Final Battle on next winner.
+//             Blocked in Highest Winner Wins and 5H Championship.
+//
+// Shift+E  →  40-MIN QUALIFIER ONLY — instant Final Battle shortcut.
+//             Seeds leaderboard if empty, Final Battle triggers on next winner.
 //
 // Shift+Y  →  Force Highest Wins sudden-death tiebreaker.
 //             Sets 3 countries to the same top win count, ends the 40-min clock,
@@ -357,14 +400,54 @@ document.addEventListener('keydown', function (e) {
         );
     }
 
-    // Shift+F — skip qualifier timer (Final Mode on next winner)
+    // Shift+F — 40-Min Qualifier only: expire timer, Final Battle on next winner
     if (e.key === 'F' || e.key === 'f') {
         if (game.gameState !== 'PLAYING' && game.gameState !== 'COUNTDOWN') {
-            console.warn('[DEBUG] Shift+F ignored — game is not running.');
+            console.warn('[DEBUG] Shift+F ignored — game is not PLAYING or COUNTDOWN.');
+            return;
+        }
+        if (game.isHighestWinsMode || game.isLongBattleMode) {
+            console.warn('[DEBUG] Shift+F is for 40-Min Qualifier only. Use Shift+H for Highest Wins, Shift+L for 5H Championship.');
             return;
         }
         game.sessionStartTime = Date.now() - game.QUALIFY_DURATION_MS - 1;
-        console.log('[DEBUG] Shift+F — Final Mode will trigger on next winner.');
+        console.log('[DEBUG] Shift+F — qualifier timer expired; Final Battle on next winner.');
+    }
+
+    // Shift+E — 40-Min Qualifier only: instant Final Battle (seeds lb if empty)
+    if (e.key === 'E' || e.key === 'e') {
+        if (game.isHighestWinsMode || game.isLongBattleMode) {
+            console.warn('[DEBUG] Shift+E is for 40-Min Qualifier only.');
+            return;
+        }
+        if (game.isFinalMode) {
+            console.warn('[DEBUG] Shift+E — already in Final Battle.');
+            return;
+        }
+        if (game.gameState !== 'PLAYING' && game.gameState !== 'COUNTDOWN') {
+            console.warn('[DEBUG] Shift+E ignored — game is not PLAYING or COUNTDOWN.');
+            return;
+        }
+        // Expire qualifier clock so _enterFinalMode fires on next winner
+        game.sessionStartTime = Date.now() - game.QUALIFY_DURATION_MS - 1;
+        // Seed leaderboard if empty so _enterFinalMode has finalists to promote
+        var lbE = game.winnerManager.getLeaderboard();
+        if (!lbE.length) {
+            var poolE = (game.activeCountries && game.activeCountries.length)
+                ? game.activeCountries : (game.allCountries || []);
+            var seedE = Math.min(6, poolE.length);
+            for (var ei = 0; ei < seedE; ei++) {
+                var ec = poolE[ei];
+                game.winnerManager._wins[ec.code] = {
+                    name    : ec.name,
+                    imageSrc: (ec.image && ec.image.src) ? ec.image.src : null,
+                    wins    : seedE - ei,
+                };
+                if (ec.image) game.winnerManager._imageCache[ec.code] = ec.image;
+            }
+            try { game.winnerManager._saveWins(); } catch (_) {}
+        }
+        console.log('[DEBUG] Shift+E — Final Battle triggers on next winner (lb seeded if was empty).');
     }
 
     // Shift+C — instantly trigger Grand Champion screen (test what it looks like)
@@ -388,6 +471,58 @@ document.addEventListener('keydown', function (e) {
 
         console.log('[DEBUG] Shift+C — Triggering Grand Champion for:', country.name);
         game._triggerGrandChampion(country);
+    }
+
+    // Shift+N — skip to the next round in Highest Winner Wins OR 5H Championship.
+    //           Expires the 40-min clock immediately and ends the current round,
+    //           showing the 1-min winner display before Round N+1 starts.
+    if (e.key === 'N' || e.key === 'n') {
+        if (!game.isHighestWinsMode && !game.isLongBattleMode) {
+            console.warn('[DEBUG] Shift+N only works in Highest Winner Wins or 5H Championship mode.');
+            return;
+        }
+        if (game.gameState !== 'PLAYING' && game.gameState !== 'COUNTDOWN') {
+            console.warn('[DEBUG] Shift+N ignored — game is not PLAYING or COUNTDOWN.');
+            return;
+        }
+        if (game.isLongBattleMode && game.sessionMode && game.sessionMode.inGrandFinal) {
+            console.warn('[DEBUG] Shift+N — already in Grand Final, cannot skip round.');
+            return;
+        }
+
+        // Ensure at least one win exists so a named winner can be displayed
+        var lbN = game.winnerManager.getLeaderboard();
+        if (!lbN.length) {
+            var poolN = (game.activeCountries && game.activeCountries.length)
+                ? game.activeCountries
+                : (game.allCountries || []);
+            var seedCount = Math.min(3, poolN.length);
+            for (var si = 0; si < seedCount; si++) {
+                var sc = poolN[si];
+                game.winnerManager._wins[sc.code] = {
+                    name    : sc.name,
+                    imageSrc: (sc.image && sc.image.src) ? sc.image.src : null,
+                    wins    : seedCount - si,
+                };
+                if (sc.image) game.winnerManager._imageCache[sc.code] = sc.image;
+            }
+            try { game.winnerManager._saveWins(); } catch (_) {}
+        }
+
+        // Expire the segment clock so onRoundComplete() returns segment_end
+        game.sessionMode.debugExpireSegment();
+
+        // Force-end the current arena round right now via a silent tie
+        // so the user doesn't have to wait for flags to drain naturally.
+        var fakeWinner = { isTie: true, countries: [], isSilent: true };
+        game.winnerManager.winner = fakeWinner;
+        if (game.winnerManager.onWin) game.winnerManager.onWin(fakeWinner);
+
+        console.log(
+            '[DEBUG] Shift+N — Round', (game.sessionMode.segmentIndex + 1),
+            'ended. 1-min winner display → Round',
+            (game.sessionMode.segmentIndex + 2), 'will start next.'
+        );
     }
 
     // Shift+H — trigger Highest Wins champion end (for testing HighestWinsMode champion screen)

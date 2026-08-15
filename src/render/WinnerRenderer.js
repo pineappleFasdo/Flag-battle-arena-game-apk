@@ -10,20 +10,22 @@ export default class WinnerRender {
     }
 
     draw(ctx, winner, canvasWidth, canvasHeight, isCountdown = false, animT = 1,
-         arenaX, arenaY, arenaRadius, isFinalMode = false, finalFlagsLeft = 0) {
+         arenaX, arenaY, arenaRadius, isFinalMode = false, finalFlagsLeft = 0,
+         nextRoundSecsRemain = null) {
         if (!winner) return;
 
         if (winner.isTie) {
             if (winner.isSilent) return;
-            this._drawTie(ctx, winner, canvasWidth, canvasHeight, animT);
+            this._drawTie(ctx, winner, canvasWidth, canvasHeight, animT, nextRoundSecsRemain);
             return;
         }
 
         this._drawWinner(ctx, winner, canvasWidth, canvasHeight,
-            isCountdown, animT, arenaX, arenaY, arenaRadius, isFinalMode, finalFlagsLeft);
+            isCountdown, animT, arenaX, arenaY, arenaRadius, isFinalMode, finalFlagsLeft,
+            nextRoundSecsRemain);
     }
 
-    _drawWinner(ctx, winner, cw, ch, isCountdown, animT, arenaX, arenaY, arenaR, isFinalMode, finalFlagsLeft) {
+    _drawWinner(ctx, winner, cw, ch, isCountdown, animT, arenaX, arenaY, arenaR, isFinalMode, finalFlagsLeft, nextRoundSecsRemain = null) {
         const ease = this._easeOutBack(Math.min(1, animT));
         const fade = Math.min(1, animT * 1.6);
 
@@ -123,7 +125,7 @@ export default class WinnerRender {
         ctx.restore(); // end arena clip
 
         // CHAMPION / ROUND WINNER label — gold for champion wording
-        const labelSize = Math.min(R * 0.155, cw * 0.052, 26);
+        const labelSize = Math.min(R * 0.095, cw * 0.032, 16);
         ctx.save();
         ctx.globalAlpha  = fade;
         ctx.textAlign    = 'center';
@@ -132,12 +134,13 @@ export default class WinnerRender {
         ctx.shadowBlur = 0;
 
         if (isFinalMode) {
-
-            ctx.fillStyle   = '#FFC83D';
+            ctx.fillStyle = '#FFC83D';
             ctx.fillText('🏆  CHAMPION  🏆', cx, cy - R * 0.40);
+        } else if (winner._isSegmentWinner) {
+            ctx.fillStyle = '#FFC83D';
+            ctx.fillText(`🏅  ROUND ${winner._segmentNumber} WINNER  🏅`, cx, cy - R * 0.40);
         } else {
-
-            ctx.fillStyle   = '#38D5FF';
+            ctx.fillStyle = '#38D5FF';
             ctx.fillText('ROUND WINNER', cx, cy - R * 0.40);
         }
         ctx.restore();
@@ -188,7 +191,7 @@ export default class WinnerRender {
         }
 
         // Country name — main text white
-        const nameSize = Math.min(R * 0.18, cw * 0.062, 32) * (0.85 + 0.15 * ease);
+        const nameSize = Math.min(R * 0.15, cw * 0.052, 26) * (0.85 + 0.15 * ease);
         ctx.save();
         ctx.globalAlpha  = fade;
         ctx.textAlign    = 'center';
@@ -208,17 +211,93 @@ export default class WinnerRender {
             ctx.textBaseline = 'middle';
             const badgeSize  = Math.min(R * 0.13, 18);
             ctx.font         = gf(700, badgeSize);
-
-            ctx.shadowBlur = 0;
+            ctx.shadowBlur   = 0;
             ctx.fillStyle    = '#38D5FF';
             ctx.fillText(`${finalFlagsLeft} FLAGS REMAINING`, cx, cy + R * 0.60);
+            ctx.restore();
+        }
+
+        // Segment winner: show win count + live countdown timer
+        if (winner._isSegmentWinner) {
+            ctx.save();
+            ctx.globalAlpha  = fade;
+            ctx.textAlign    = 'center';
+            ctx.textBaseline = 'middle';
+            const subSize    = Math.min(R * 0.055, 9);
+            ctx.font         = gf(700, subSize);
+            ctx.shadowBlur   = 0;
+            ctx.fillStyle    = '#FFC83D';
+            const wins       = winner._segmentWins ?? 0;
+            ctx.fillText(
+                `${wins} WIN${wins === 1 ? '' : 'S'} THIS ROUND`,
+                cx, cy + R * 0.54
+            );
+            ctx.restore();
+        }
+
+        // ── Next-round countdown timer pill ──────────────────────────────────
+        // Shown for ALL winner types (segment winner, regular, tie recovery)
+        // when nextRoundSecsRemain is provided. Disappears when isCountdown=true.
+        if (nextRoundSecsRemain !== null && !isCountdown) {
+            const secs     = Math.max(0, Math.ceil(nextRoundSecsRemain));
+            const pillH    = Math.max(20, R * 0.10);
+            const pillW    = Math.max(130, R * 0.80);
+            const pillX    = cx - pillW / 2;
+            const pillY    = cy + R * 0.72 - pillH / 2;
+            const pillR    = pillH / 2;
+            const fSize    = Math.min(pillH * 0.48, 11);
+
+            // Pill background — pulsing border when < 10 s
+            const pulse    = secs < 10
+                ? 0.6 + 0.4 * Math.abs(Math.sin(Date.now() / 300))
+                : 1;
+
+            ctx.save();
+            ctx.globalAlpha = fade * 0.92;
+
+            // Pill bg
+            ctx.fillStyle = 'rgba(10, 18, 40, 0.88)';
+            ctx.beginPath();
+            if (typeof ctx.roundRect === 'function') {
+                ctx.roundRect(pillX, pillY, pillW, pillH, pillR);
+            } else {
+                ctx.arc(pillX + pillR, pillY + pillH / 2, pillR, Math.PI / 2, Math.PI * 1.5);
+                ctx.lineTo(pillX + pillW - pillR, pillY);
+                ctx.arc(pillX + pillW - pillR, pillY + pillH / 2, pillR, Math.PI * 1.5, Math.PI / 2);
+                ctx.closePath();
+            }
+            ctx.fill();
+
+            // Pill border
+            ctx.strokeStyle = secs < 10 ? `rgba(255, 100, 80, ${pulse})` : 'rgba(56, 213, 255, 0.65)';
+            ctx.lineWidth   = 1.5;
+            ctx.stroke();
+
+            ctx.globalAlpha = fade;
+            ctx.textAlign    = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowBlur   = 0;
+
+            const pillCY = pillY + pillH / 2;
+
+            if (secs <= 0) {
+                ctx.font      = gf(700, fSize);
+                ctx.fillStyle = '#38D5FF';
+                ctx.fillText('STARTING NOW…', cx, pillCY);
+            } else {
+                // Render as one centered string to avoid collision at small sizes
+                ctx.font      = gf(700, fSize);
+                ctx.fillStyle = secs < 10 ? '#FF8060' : '#FFC83D';
+                ctx.fillText(`NEXT ROUND IN  ${secs}s`, cx, pillCY);
+            }
+
             ctx.restore();
         }
 
         ctx.restore();
     }
 
-    _drawTie(ctx, winner, canvasWidth, canvasHeight, animT) {
+    _drawTie(ctx, winner, canvasWidth, canvasHeight, animT, nextRoundSecsRemain = null) {
         const ease = this._easeOutBack(Math.min(1, animT));
         const fade = Math.min(1, animT * 1.6);
 
@@ -273,6 +352,30 @@ export default class WinnerRender {
         ctx.fillStyle = '#91A7C9';
         ctx.shadowBlur = 0;
         ctx.fillText('exited the arena simultaneously', cx, canvasHeight * 0.72);
+
+        // Countdown pill for tie screen too
+        if (nextRoundSecsRemain !== null) {
+            const secs  = Math.max(0, Math.ceil(nextRoundSecsRemain));
+            const fSize = Math.min(canvasWidth * 0.024, 10);
+            const pillH = fSize * 2;
+            const pillW = Math.min(canvasWidth * 0.60, 220);
+            const pillX = cx - pillW / 2;
+            const pillY = canvasHeight * 0.80 - pillH / 2;
+            const pillR = pillH / 2;
+
+            ctx.fillStyle = 'rgba(10,18,40,0.88)';
+            ctx.beginPath();
+            if (typeof ctx.roundRect === 'function') ctx.roundRect(pillX, pillY, pillW, pillH, pillR);
+            else ctx.rect(pillX, pillY, pillW, pillH);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(56,213,255,0.65)';
+            ctx.lineWidth   = 1.5;
+            ctx.stroke();
+
+            ctx.font      = gf(700, fSize);
+            ctx.fillStyle = secs < 10 ? '#FF8060' : '#FFC83D';
+            ctx.fillText(`NEXT ROUND IN  ${secs}s`, cx, pillY + pillH / 2);
+        }
 
         ctx.restore();
     }

@@ -78,6 +78,7 @@ export default class LongBattleMode {
         this.segmentWinners = [];
         this.lastSegmentWinner = null;
         this.lastSegmentWinnerAt = 0;
+        this._segmentPauseOffsetMs = 0;
 
         this.game._qualifyPool = this.game._shuffle([...this.game.allCountries]);
         this.game._qualifyWinners = [];
@@ -116,7 +117,8 @@ export default class LongBattleMode {
 
     isSegmentTimeUp() {
         if (this.ended || this.inGrandFinal) return false;
-        return Date.now() - this.segmentStartTime >= LongBattleMode.SEGMENT_MS;
+        const elapsed = Date.now() - this.segmentStartTime - (this._segmentPauseOffsetMs ?? 0);
+        return elapsed >= LongBattleMode.SEGMENT_MS;
     }
 
     isSessionTimeUp() {
@@ -125,7 +127,8 @@ export default class LongBattleMode {
 
     remainingSegmentMs() {
         if (this.inGrandFinal) return 0;
-        return Math.max(0, LongBattleMode.SEGMENT_MS - (Date.now() - this.segmentStartTime));
+        const elapsed = Date.now() - this.segmentStartTime - (this._segmentPauseOffsetMs ?? 0);
+        return Math.max(0, LongBattleMode.SEGMENT_MS - elapsed);
     }
 
     remainingSessionMs() {
@@ -173,8 +176,13 @@ export default class LongBattleMode {
             return "grand_final";
         }
 
-        // Next 40-min highest-wins round
+        // Next 40-min highest-wins round.
+        // Start the clock normally but record a pause offset equal to the
+        // winner-display hold so remainingSegmentMs() counts from 40:00 once
+        // the screen ends, not immediately.
+        const displayHoldMs = LongBattleMode.ROUND_WINNER_DISPLAY_MS ?? 60 * 1000;
         this.segmentStartTime = Date.now();
+        this._segmentPauseOffsetMs = displayHoldMs;
         this.game.winnerManager.clearWins();
         this.game.leaderboardRenderer?.reset();
         this.game.QUALIFY_DURATION_MS = LongBattleMode.SEGMENT_MS;

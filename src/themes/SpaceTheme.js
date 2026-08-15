@@ -299,22 +299,21 @@ export default class SpaceTheme {
         const spin  = (Math.random()-0.5)*0.10;
         const rot   = Math.random()*Math.PI*2;
         // More sides + deeper jagged cuts = realistic rocky silhouette like reference image
-        const sides = 9 + Math.floor(Math.random()*4);  // 9-12 sides
+        const sides = 12 + Math.floor(Math.random()*5);  // 12-16 sides — rounder silhouette
         const pts   = [];
         for (let i=0;i<sides;i++){
             const a = (i/sides)*Math.PI*2;
-            // Alternate between two radii for a jagged, cratered outline
-            const isJag = i % 2 === 0;
-            const j = isJag ? (0.70 + Math.random()*0.30) : (0.45 + Math.random()*0.25);
+            // Gentle random variation → smooth, rounded asteroid body like the reference image
+            const j = 0.82 + Math.random()*0.18;
             pts.push({ x:Math.cos(a)*size*j, y:Math.sin(a)*size*j });
         }
         // Store crater positions procedurally (fixed per asteroid)
         const craters = [];
-        const nCraters = 2 + Math.floor(Math.random()*3);
+        const nCraters = 3 + Math.floor(Math.random()*3);  // 3-5 craters — more visible detail
         for (let c=0; c<nCraters; c++) {
             const ca = Math.random()*Math.PI*2;
-            const cr = (0.15+Math.random()*0.35)*size;
-            craters.push({ x:Math.cos(ca)*cr, y:Math.sin(ca)*cr, r:(0.06+Math.random()*0.10)*size });
+            const cr = (0.18+Math.random()*0.32)*size;
+            craters.push({ x:Math.cos(ca)*cr, y:Math.sin(ca)*cr, r:(0.07+Math.random()*0.11)*size });
         }
         this._asteroids.push({
             x,y,vx,vy,rot,spin,size,pts,craters,
@@ -1006,27 +1005,26 @@ export default class SpaceTheme {
             // Base fill: grey-brown rock — radial gradient from lighter face to dark edge
             // Matches the sandy/grey tones in the reference image exactly
             const grad = ctx.createRadialGradient(
-                -a.size*0.22, -a.size*0.18, a.size*0.05,  // highlight off-center
+                -a.size*0.25, -a.size*0.22, a.size*0.05,  // highlight off-center
                  0, 0, a.size
             );
-            grad.addColorStop(0,    '#C8B89A');  // warm light grey (lit face)
-            grad.addColorStop(0.25, '#A89070');  // mid sandy-grey
-            grad.addColorStop(0.55, '#7A6250');  // darker grey-brown
-            grad.addColorStop(0.80, '#4A3828');  // dark brown edge
-            grad.addColorStop(1.0,  '#2A1C12');  // near-black rim
+            grad.addColorStop(0,    '#BEC8D3');  // light blue-grey (lit face)
+            grad.addColorStop(0.28, '#8898A8');  // mid steel grey
+            grad.addColorStop(0.58, '#4E6070');  // medium-dark blue-grey
+            grad.addColorStop(0.82, '#293848');  // dark edge
+            grad.addColorStop(1.0,  '#131C26');  // near-black rim
             ctx.fillStyle = grad;
             ctx.fill();
 
-            // Warm orange-yellow rim glow (heat from entering atmosphere)
-            // Drawn as a stroke so it's cheap — no blur needed
-            ctx.strokeStyle = 'rgba(255,160,20,0.80)';
-            ctx.lineWidth   = Math.max(1.2, a.size * 0.08);
+            // Clean dark cartoon border — no glow, no blur
+            ctx.strokeStyle = '#111C28';
+            ctx.lineWidth   = Math.max(1, a.size * 0.06);
             ctx.stroke();
 
-            // Surface cracks — thin dark lines across the face for texture
+            // Surface variation — subtle grey lines for rock texture
             ctx.save();
-            ctx.globalAlpha = 0.45;
-            ctx.strokeStyle = '#3A2518';
+            ctx.globalAlpha = 0.28;
+            ctx.strokeStyle = '#1A2A3A';
             ctx.lineWidth   = Math.max(0.5, a.size * 0.025);
             ctx.beginPath();
             ctx.moveTo(-a.size*0.30,  a.size*0.08);
@@ -1042,7 +1040,7 @@ export default class SpaceTheme {
             // Highlight streak on lit side (upper-left, matches reference image)
             ctx.save();
             ctx.globalAlpha = 0.50;
-            ctx.strokeStyle = '#D8C8AA';
+            ctx.strokeStyle = '#D0DCE8';
             ctx.lineWidth   = Math.max(0.8, a.size * 0.035);
             ctx.lineCap     = 'round';
             ctx.beginPath();
@@ -1054,13 +1052,13 @@ export default class SpaceTheme {
             // Craters — dark filled circles with a thin lighter rim
             if (a.craters) {
                 for (const cr of a.craters) {
-                    // Dark crater pit
-                    ctx.fillStyle = 'rgba(28,16,8,0.72)';
+                    // Dark crater pit — deep blue-grey shadow
+                    ctx.fillStyle = 'rgba(8,18,32,0.80)';
                     ctx.beginPath();
                     ctx.arc(cr.x, cr.y, cr.r, 0, Math.PI*2);
                     ctx.fill();
-                    // Lighter rim (catches the light)
-                    ctx.strokeStyle = 'rgba(160,130,90,0.50)';
+                    // Cool grey crater rim
+                    ctx.strokeStyle = 'rgba(145,168,188,0.60)';
                     ctx.lineWidth   = Math.max(0.4, cr.r * 0.25);
                     ctx.beginPath();
                     ctx.arc(cr.x - cr.r*0.15, cr.y - cr.r*0.15, cr.r, 0, Math.PI*2);
