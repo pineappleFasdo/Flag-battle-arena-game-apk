@@ -20,8 +20,8 @@ export default class ArenaRenderer {
 
         // Soft outer glow
         ctx.save();
-        ctx.shadowColor = ringGlow;
-        ctx.shadowBlur  = 14;
+
+        ctx.shadowBlur = 0;
         ctx.strokeStyle = ringGlow;
         ctx.lineWidth   = 7;
         ctx.lineCap     = "round";
@@ -32,12 +32,12 @@ export default class ArenaRenderer {
         ctx.strokeStyle = ring;
         ctx.lineWidth   = 3;
         ctx.lineCap     = "round";
-        ctx.shadowColor = ringGlow;
-        ctx.shadowBlur  = 6;
+
+        ctx.shadowBlur = 0;
         this._strokeRing(ctx, arena, gapAngle);
 
         // Subtle inner ring
-        ctx.shadowBlur  = 0;
+        ctx.shadowBlur = 0;
         ctx.strokeStyle = ringOuter;
         ctx.lineWidth   = 1.4;
         this._strokeRing(ctx, arena, gapAngle, -2.2);

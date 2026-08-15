@@ -119,12 +119,91 @@ homeScreen.innerHTML = `
     `).join('')}
   </div>
 
+  <div id="nr-load-bar-wrap" style="
+      padding: 10px 18px 4px;
+      display: flex; flex-direction: column; gap: 5px;
+    ">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span id="nr-load-label" style="
+        font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
+        color: rgba(255,255,255,0.55); font-family: 'Orbitron', system-ui, sans-serif;
+      ">LOADING FLAGS…</span>
+      <span id="nr-load-pct" style="
+        font-size: 11px; font-weight: 700;
+        color: rgba(255,255,255,0.45); font-family: monospace;
+      ">0%</span>
+    </div>
+    <div style="
+      width: 100%; height: 5px; background: rgba(255,255,255,0.10);
+      border-radius: 3px; overflow: hidden;
+    ">
+      <div id="nr-load-fill" style="
+        height: 100%; width: 0%; border-radius: 3px;
+        background: linear-gradient(90deg, #3D7CFF, #38D5FF);
+        transition: width 0.15s ease;
+      "></div>
+    </div>
+  </div>
   <div class="nr-home-footer">Pick a theme, then a mode to start</div>
 `;
 overlay.appendChild(homeScreen);
 
 // ── Game ─────────────────────────────────────────────────────────────────────
 const game = new Game(canvas);
+
+// ── Flag preloading ───────────────────────────────────────────────────────────
+// Kick off loading all flags in the background immediately.
+// Event cards are disabled with a visual indicator until ready.
+(function initFlagPreload() {
+    const codes = game.allCountries.map(c => c.code);
+    const fill  = document.getElementById('nr-load-fill');
+    const pct   = document.getElementById('nr-load-pct');
+    const label = document.getElementById('nr-load-label');
+    const cards = document.getElementById('nr-event-list');
+
+    // Disable cards visually
+    if (cards) {
+        cards.querySelectorAll('.nr-event-card').forEach(function(btn) {
+            btn.style.opacity       = '0.45';
+            btn.style.pointerEvents = 'none';
+            btn.style.filter        = 'grayscale(0.5)';
+        });
+    }
+
+    game.flagLoader.preloadAll(codes,
+        function onProgress(loaded, total) {
+            const p = total > 0 ? (loaded / total) : 1;
+            const pStr = Math.round(p * 100) + '%';
+            if (fill)  fill.style.width = pStr;
+            if (pct)   pct.textContent  = pStr;
+        },
+        function onComplete() {
+            // All flags settled — enable cards and hide bar
+            if (cards) {
+                cards.querySelectorAll('.nr-event-card').forEach(function(btn) {
+                    btn.style.opacity       = '';
+                    btn.style.pointerEvents = '';
+                    btn.style.filter        = '';
+                });
+            }
+            if (fill)  fill.style.width            = '100%';
+            if (pct)   pct.textContent             = '100%';
+            if (label) label.textContent           = 'READY';
+            if (label) label.style.color           = 'rgba(56,213,255,0.80)';
+            // Fade bar out after 1.2 s
+            setTimeout(function() {
+                var wrap = document.getElementById('nr-load-bar-wrap');
+                if (wrap) {
+                    wrap.style.transition = 'opacity 0.6s';
+                    wrap.style.opacity    = '0';
+                    setTimeout(function() {
+                        if (wrap) wrap.style.display = 'none';
+                    }, 650);
+                }
+            }, 1200);
+        }
+    );
+})();
 
 function resize() {
     const vp  = window.visualViewport;

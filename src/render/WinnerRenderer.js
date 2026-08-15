@@ -129,14 +129,14 @@ export default class WinnerRender {
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
         ctx.font         = gf(900, labelSize);
-        ctx.shadowBlur   = 12;
+        ctx.shadowBlur = 0;
 
         if (isFinalMode) {
-            ctx.shadowColor = 'rgba(255, 200, 61, 0.75)';
+
             ctx.fillStyle   = '#FFC83D';
             ctx.fillText('🏆  CHAMPION  🏆', cx, cy - R * 0.40);
         } else {
-            ctx.shadowColor = 'rgba(61, 124, 255, 0.70)';
+
             ctx.fillStyle   = '#38D5FF';
             ctx.fillText('ROUND WINNER', cx, cy - R * 0.40);
         }
@@ -179,10 +179,10 @@ export default class WinnerRender {
 
             ctx.imageSmoothingEnabled = true;
             ctx.imageSmoothingQuality = 'high';
-            ctx.shadowColor = 'rgba(61, 124, 255, 0.45)';
-            ctx.shadowBlur  = 18 * ease;
+
+            ctx.shadowBlur = 0;
             ctx.drawImage(img, flagX, flagY, flagW, flagH);
-            ctx.shadowBlur  = 0;
+            ctx.shadowBlur = 0;
 
             ctx.restore();
         }
@@ -194,8 +194,8 @@ export default class WinnerRender {
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
         ctx.font         = gf(800, nameSize);
-        ctx.shadowColor  = 'rgba(0,0,0,0.90)';
-        ctx.shadowBlur   = 12;
+
+        ctx.shadowBlur = 0;
         ctx.fillStyle    = '#F4F7FF';
         ctx.fillText(winner.country.name, cx, cy + R * 0.36);
         ctx.restore();
@@ -208,8 +208,8 @@ export default class WinnerRender {
             ctx.textBaseline = 'middle';
             const badgeSize  = Math.min(R * 0.13, 18);
             ctx.font         = gf(700, badgeSize);
-            ctx.shadowColor  = 'rgba(0,0,0,0.85)';
-            ctx.shadowBlur   = 8;
+
+            ctx.shadowBlur = 0;
             ctx.fillStyle    = '#38D5FF';
             ctx.fillText(`${finalFlagsLeft} FLAGS REMAINING`, cx, cy + R * 0.60);
             ctx.restore();
@@ -231,8 +231,8 @@ export default class WinnerRender {
         const cx = canvasWidth / 2;
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor  = 'rgba(0,0,0,0.90)';
-        ctx.shadowBlur   = 16;
+
+        ctx.shadowBlur = 0;
 
         const headingSize = Math.min(canvasWidth * 0.068, 56) * (0.9 + 0.1 * ease);
         ctx.font      = gf(900, headingSize);
@@ -254,10 +254,10 @@ export default class WinnerRender {
             if (img && img.complete) {
                 ctx.imageSmoothingEnabled = true;
                 ctx.imageSmoothingQuality = 'high';
-                ctx.shadowColor = 'rgba(255, 83, 104, 0.30)';
-                ctx.shadowBlur  = 18;
+
+                ctx.shadowBlur = 0;
                 ctx.drawImage(img, x, flagY, flagW, flagH);
-                ctx.shadowBlur  = 0;
+                ctx.shadowBlur = 0;
                 ctx.strokeStyle = 'rgba(244, 247, 255, 0.35)';
                 ctx.lineWidth   = 1.5;
                 ctx.strokeRect(x, flagY, flagW, flagH);
@@ -265,13 +265,13 @@ export default class WinnerRender {
             const nameSize = Math.min(canvasWidth * 0.024, 17);
             ctx.font      = gf(700, nameSize);
             ctx.fillStyle = '#F4F7FF';
-            ctx.shadowBlur = 8;
+            ctx.shadowBlur = 0;
             ctx.fillText(countries[i].name.toUpperCase(), x + flagW / 2, flagY + flagH + 16);
         }
 
         ctx.font      = gf(600, Math.min(canvasWidth * 0.028, 20));
         ctx.fillStyle = '#91A7C9';
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = 0;
         ctx.fillText('exited the arena simultaneously', cx, canvasHeight * 0.72);
 
         ctx.restore();

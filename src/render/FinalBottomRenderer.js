@@ -39,8 +39,8 @@ export default class FinalBottomRenderer {
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
         ctx.font         = gf(800, Math.min(headerH * 0.72, 14));
-        ctx.shadowColor  = 'rgba(61, 124, 255, 0.45)';
-        ctx.shadowBlur   = 6;
+
+        ctx.shadowBlur = 0;
         ctx.fillStyle    = `rgba(56, 213, 255, ${pulseAlpha})`;
         ctx.fillText(`EARTHQUAKE  ·  ${left} FLAG${left !== 1 ? 'S' : ''} LEFT`, canvasWidth / 2, headerY);
         ctx.restore();
@@ -76,8 +76,8 @@ export default class FinalBottomRenderer {
 
             if (alive) {
                 const glow = 0.55 + 0.35 * Math.sin(this._pulse);
-                ctx.shadowColor = `rgba(61, 124, 255, ${glow})`;
-                ctx.shadowBlur  = 7;
+
+                ctx.shadowBlur = 0;
             } else {
                 ctx.globalAlpha = 0.30;
             }

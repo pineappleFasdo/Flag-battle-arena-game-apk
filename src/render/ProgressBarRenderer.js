@@ -49,8 +49,8 @@ export default class ProgressBarRenderer {
         ctx.font         = gf(700, textSize);
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor  = 'rgba(0,0,0,0.55)';
-        ctx.shadowBlur   = 3;
+
+        ctx.shadowBlur = 0;
         ctx.fillText(`${alive} / ${total} COUNTRIES`, centerX, barY + barHeight / 2);
         ctx.shadowBlur = 0;
 

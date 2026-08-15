@@ -295,20 +295,31 @@ export default class SpaceTheme {
         const vx = Math.cos(angle)*speed;
         const vy = Math.sin(angle)*speed;
 
-        const size  = 12 + Math.random()*16;  // 12-28px — chunky rocks
+        const size  = 14 + Math.random()*14;  // 14-28px — chunky rocks
         const spin  = (Math.random()-0.5)*0.10;
         const rot   = Math.random()*Math.PI*2;
-        const sides = 6 + Math.floor(Math.random()*4);
+        // More sides + deeper jagged cuts = realistic rocky silhouette like reference image
+        const sides = 9 + Math.floor(Math.random()*4);  // 9-12 sides
         const pts   = [];
         for (let i=0;i<sides;i++){
             const a = (i/sides)*Math.PI*2;
-            const j = 0.55+Math.random()*0.45;
-            pts.push({ x:Math.cos(a)*size*j, y:Math.sin(a)*size*j*0.5 });
+            // Alternate between two radii for a jagged, cratered outline
+            const isJag = i % 2 === 0;
+            const j = isJag ? (0.70 + Math.random()*0.30) : (0.45 + Math.random()*0.25);
+            pts.push({ x:Math.cos(a)*size*j, y:Math.sin(a)*size*j });
+        }
+        // Store crater positions procedurally (fixed per asteroid)
+        const craters = [];
+        const nCraters = 2 + Math.floor(Math.random()*3);
+        for (let c=0; c<nCraters; c++) {
+            const ca = Math.random()*Math.PI*2;
+            const cr = (0.15+Math.random()*0.35)*size;
+            craters.push({ x:Math.cos(ca)*cr, y:Math.sin(ca)*cr, r:(0.06+Math.random()*0.10)*size });
         }
         this._asteroids.push({
-            x,y,vx,vy,rot,spin,size,pts,
+            x,y,vx,vy,rot,spin,size,pts,craters,
             trail:[],
-            trailLen: Math.round(12+speed*2),
+            trailLen: Math.round(this._isMobile ? 6+speed : 12+speed*1.8),
             hitCooldown:0,
             hit:false,
         });
@@ -319,7 +330,10 @@ export default class SpaceTheme {
         if (this._asteroidsDisabled) return;
         this._showerState         = "ACTIVE";
         this._showerActiveFrames  = 0;
-        const count = 8 + Math.floor(Math.random()*7);   // 8-14 asteroids per shower
+        // Mobile: fewer asteroids per shower to stay within budget
+        const count = this._isMobile
+            ? (4 + Math.floor(Math.random()*3))   // 4-6 on mobile
+            : (6 + Math.floor(Math.random()*5));   // 6-10 on desktop
         this._showerBatchLeft     = count;
         // Spread over 3 s (was 4 s) so the shower feels intense and focused
         this._showerBatchInterval = Math.max(1, Math.floor((3*60)/count));
@@ -462,65 +476,115 @@ export default class SpaceTheme {
         // stateBlocked + playing: timer pauses (playingFrames doesn't tick) so
         // showers don't fire during event-start flash or transition cards
 
-        // ── Move asteroids (always update existing ones so they exit cleanly) ─
-        const flags    = flagManager?.flags ?? [];
-        const toRemove = [];
+        // ── Move asteroids ────────────────────────────────────────────────────
+        const flags     = flagManager?.flags ?? [];
+        const toRemove  = [];
+        // Deferred burn queue — CRITICAL: onFlagBurned splices flagManager.flags,
+        // mutating the array mid-iteration. Collect burns and dispatch after loops.
+        const burnQueue = [];   // { flag, bx, by }
+        // Physics push queue — apply impulse to nearby flags after burn dispatch
+        const pushQueue = [];   // { flag, fx, fy }  (force to apply)
 
-        for (let ai=0; ai<this._asteroids.length; ai++) {
+        for (let ai = 0; ai < this._asteroids.length; ai++) {
             const a = this._asteroids[ai];
 
-            a.trail.push({x:a.x, y:a.y});
+            a.trail.push({ x: a.x, y: a.y });
             if (a.trail.length > a.trailLen) a.trail.shift();
 
             a.x += a.vx;
             a.y += a.vy;
             a.rot += a.spin;
-            if (a.hitCooldown>0) a.hitCooldown--;
+            if (a.hitCooldown > 0) a.hitCooldown--;
 
-            // Remove once fully off-screen (generous margin)
+            // Remove once off-screen
             const margin = 100;
-            if (a.x<-margin || a.x>lw+margin || a.y<-margin || a.y>lh+margin) {
+            if (a.x < -margin || a.x > lw + margin || a.y < -margin || a.y > lh + margin) {
                 toRemove.push(ai);
                 continue;
             }
 
-            // ── NO arena wall collision — asteroids fly straight through ──────
-            // (Removed entirely. Asteroids are unstoppable cosmic forces.)
+            // ── Flag collision — destroy + push all flags in path ─────────────
+            if (Matter) {
+                // Asteroid speed magnitude (used to scale impact push)
+                const aSpeed = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
+                // Normalized asteroid direction
+                const aDirX  = a.vx / (aSpeed || 1);
+                const aDirY  = a.vy / (aSpeed || 1);
 
-            // ── Flag collision — knock flag OUT of arena ──────────────────────
-            if (a.hitCooldown===0 && Matter) {
                 for (const flag of flags) {
+                    if (flag._pendingAsteroidBurn) continue; // already queued
                     const bp = flag.body.position;
                     const dx = a.x - bp.x;
                     const dy = a.y - bp.y;
-                    const hitR = a.size*0.9 + (flag.width+flag.height)*0.30;
+                    const distSq = dx * dx + dy * dy;
 
-                    if (dx*dx+dy*dy < hitR*hitR) {
-                        // ── BURN: immediately eliminate the flag ──────────────
-                        // Spawn burn visual at the flag's position
+                    // Direct hit radius — flag is in the asteroid's path
+                    const hitR = a.size * 0.9 + (flag.width + flag.height) * 0.30;
+
+                    if (distSq < hitR * hitR) {
+                        // Direct hit — burn and eliminate the flag
                         this._spawnBurnEffect(bp.x, bp.y);
-                        // Also spawn asteroid impact at collision point
                         this._spawnImpact(a.x, a.y);
-
-                        // 🔊 Impact crack — meteor strike sound
                         try { this.audio?.playAsteroidHit?.(); } catch(e) {}
 
-                        // Notify Game.js to remove this flag from physics + lists
-                        if (this.onFlagBurned) {
-                            this.onFlagBurned(flag, bp.x, bp.y);
-                        }
+                        flag._pendingAsteroidBurn = true;
+                        burnQueue.push({ flag, bx: bp.x, by: bp.y });
+                        // No hitCooldown — asteroid burns every flag in its path
 
-                        // Asteroid continues straight — no deflection
-                        a.hitCooldown = 45;
-                        a.hit = true;
-                        // don't break — one asteroid can burn multiple flags if aligned
+                    } else {
+                        // Near-miss physics push — flags within shockwave radius get shoved
+                        // Shockwave radius = 2.5× asteroid size around impact point
+                        const shockR = a.size * 2.5;
+                        if (distSq < shockR * shockR) {
+                            const dist = Math.sqrt(distSq) || 1;
+                            // Direction from asteroid to flag (push outward)
+                            const pushDirX = -dx / dist;
+                            const pushDirY = -dy / dist;
+                            // Force: strongest at center, fades with distance
+                            // Also bias along asteroid travel direction (momentum transfer)
+                            const falloff  = 1 - (dist / shockR);
+                            const forceMag = 0.0006 * falloff * aSpeed;
+                            pushQueue.push({
+                                flag,
+                                fx: (pushDirX * 0.7 + aDirX * 0.3) * forceMag,
+                                fy: (pushDirY * 0.7 + aDirY * 0.3) * forceMag,
+                            });
+                        }
                     }
                 }
             }
         }
 
-        for (let i=toRemove.length-1; i>=0; i--)
-            this._asteroids.splice(toRemove[i],1);
+        for (let i = toRemove.length - 1; i >= 0; i--)
+            this._asteroids.splice(toRemove[i], 1);
+
+        // ── Apply shockwave pushes (safe — before burn removals) ─────────────
+        if (pushQueue.length > 0 && Matter) {
+            for (const { flag, fx, fy } of pushQueue) {
+                if (!flag._pendingAsteroidBurn && flag.body) {
+                    Matter.Body.applyForce(flag.body, flag.body.position, { x: fx, y: fy });
+                    // Add a spin kick for visual drama
+                    Matter.Body.setAngularVelocity(
+                        flag.body,
+                        flag.body.angularVelocity + (Math.random() - 0.5) * 0.25
+                    );
+                }
+            }
+        }
+
+        // ── Dispatch deferred burns (flags array mutation now safe) ───────────
+        if (burnQueue.length > 0 && this.onFlagBurned) {
+            for (const { flag, bx, by } of burnQueue) {
+                flag._pendingAsteroidBurn = false;
+                this.onFlagBurned(flag, bx, by);
+            }
+        }
+
+        // Cap total active burn effects so mobile can't snowball into lag
+        const maxBurns = this._isMobile ? 3 : 6;
+        if (this._burnEffects.length > maxBurns) {
+            this._burnEffects.splice(0, this._burnEffects.length - maxBurns);
+        }
 
         // Burn effects update — fire particles where flags were incinerated
         for (let i = this._burnEffects.length - 1; i >= 0; i--) {
@@ -561,7 +625,10 @@ export default class SpaceTheme {
             '255,240,160', '255,200,60', '255,160,20',
             '255,110,5',   '230,70,0',   '200,40,0',
         ];
-        const count   = 45 + Math.floor(Math.random() * 20);
+        // Mobile: fewer particles to avoid frame drops
+        const count   = this._isMobile
+            ? (18 + Math.floor(Math.random() * 8))
+            : (38 + Math.floor(Math.random() * 14));
         const particles = [];
         for (let i = 0; i < count; i++) {
             const ang = Math.random() * Math.PI * 2;
@@ -579,7 +646,8 @@ export default class SpaceTheme {
             });
         }
         // Extra large core flash particles
-        for (let i = 0; i < 8; i++) {
+        const coreCount = this._isMobile ? 3 : 8;
+        for (let i = 0; i < coreCount; i++) {
             const ang = Math.random() * Math.PI * 2;
             particles.push({
                 x, y,
@@ -590,14 +658,17 @@ export default class SpaceTheme {
                 color: '255,220,100',
             });
         }
-        this._burnEffects.push({ x, y, particles, life: 130, maxLife: 130 });
+        const burnLife = this._isMobile ? 70 : 100;
+        this._burnEffects.push({ x, y, particles, life: burnLife, maxLife: burnLife });
     }
 
     _spawnImpact(x, y) {
         // Pure orange/amber sparks radiating from impact
         const colours = ['255,210,60','255,150,20','255,240,180','255,90,5','230,60,0'];
-        // Primary large sparks
-        const count   = 22 + Math.floor(Math.random() * 12);
+        // Mobile: fewer sparks
+        const count   = this._isMobile
+            ? (8 + Math.floor(Math.random() * 5))
+            : (16 + Math.floor(Math.random() * 8));
         const sparks  = [];
         for (let i=0;i<count;i++){
             const ang = Math.random()*Math.PI*2;
@@ -611,10 +682,13 @@ export default class SpaceTheme {
                 r:  1.8 + Math.random() * 4.5,
             });
         }
-        this._impacts.push({ sparks, life: 70 });
-        // Expanding shock ring — double ring for drama
-        this._impacts.push({ ring:{x, y, maxR:55, color:'255,150,20'}, life:22 });
-        this._impacts.push({ ring:{x, y, maxR:30, color:'255,230,80'}, life:14 });
+        const sparkLife = this._isMobile ? 35 : 55;
+        this._impacts.push({ sparks, life: sparkLife });
+        // Expanding shock ring (single on mobile, double on desktop)
+        this._impacts.push({ ring:{x, y, maxR:55, color:'255,150,20'}, life:this._isMobile?14:22 });
+        if (!this._isMobile) {
+            this._impacts.push({ ring:{x, y, maxR:30, color:'255,230,80'}, life:14 });
+        }
     }
 
     // ── Draw (background only — stars, nebula, planets) ──────────────────────
@@ -781,14 +855,14 @@ export default class SpaceTheme {
         const br   = boxH*0.5;
 
         ctx.globalAlpha = alpha*0.28;
-        ctx.shadowColor = '#FF5500';
-        ctx.shadowBlur  = 34;
+
+        ctx.shadowBlur = 0;
         ctx.fillStyle   = 'rgba(255,70,0,0.14)';
         _pill(ctx,boxX-14,boxY-14,boxW+28,boxH+28,br+12); ctx.fill();
 
         ctx.globalAlpha = alpha*0.93;
-        ctx.shadowBlur  = 16;
-        ctx.shadowColor = '#FF3300';
+        ctx.shadowBlur = 0;
+
         const bg = ctx.createLinearGradient(boxX,boxY,boxX,boxY+boxH);
         bg.addColorStop(0,  'rgba(150,25,0,0.94)');
         bg.addColorStop(0.5,'rgba(215,55,0,0.97)');
@@ -798,11 +872,11 @@ export default class SpaceTheme {
 
         ctx.strokeStyle='rgba(255,150,40,0.92)';
         ctx.lineWidth=2.0;
-        ctx.shadowBlur=8; ctx.shadowColor='#FFAA30';
+        ctx.shadowBlur = 0;
         _pill(ctx,boxX,boxY,boxW,boxH,br); ctx.stroke();
 
         ctx.globalAlpha=alpha;
-        ctx.shadowBlur=12; ctx.shadowColor='#FFD700';
+        ctx.shadowBlur = 0;
         ctx.fillStyle='#FFE980';
         ctx.textAlign='center'; ctx.textBaseline='middle';
         ctx.fillText(text,cx,cy);
@@ -839,80 +913,165 @@ export default class SpaceTheme {
     }
 
     _drawAsteroids(ctx) {
+        if (this._asteroids.length === 0) return;
         ctx.save();
+
         for (const a of this._asteroids) {
-            // Fire trail — vivid orange/amber, fully orange-themed
-            if (a.trail.length>=2) {
+
+            // ── FLAME TRAIL ─────────────────────────────────────────────────
+            // Drawn BEFORE the rock so it appears behind the body.
+            // Reference image: wide multi-tongue flame, orange→red→yellow tips,
+            // with a few cyan/blue accent streaks for drama.
+            if (a.trail.length >= 2) {
                 ctx.save();
-                const tLen=a.trail.length;
-                for (let i=1;i<tLen;i++){
-                    const t=i/tLen;
-                    const p0=a.trail[i-1], p1=a.trail[i];
-                    ctx.beginPath(); ctx.moveTo(p0.x,p0.y); ctx.lineTo(p1.x,p1.y);
-                    // Pure orange trail: bright orange-white core fading to deep orange-red
-                    if (t > 0.75) {
-                        ctx.strokeStyle=`rgba(255,200,50,${t*0.90})`;  // bright orange-amber at tip
-                    } else if (t > 0.45) {
-                        ctx.strokeStyle=`rgba(255,130,10,${t*0.82})`;  // vivid orange mid
-                    } else {
-                        ctx.strokeStyle=`rgba(220,60,0,${t*0.65})`;    // deep orange-red tail
+                const tLen = a.trail.length;
+
+                // Direction opposite to travel = flame points backward
+                const dx = a.vx, dy = a.vy;
+                const speed = Math.sqrt(dx*dx + dy*dy) || 1;
+                // Perpendicular unit vector (for flame width spread)
+                const px = -dy / speed, py = dx / speed;
+
+                // Draw 3 flame tongues of varying width/offset for the jagged look
+                const tongues = [
+                    { spread: 0,    widthMult: 1.00, colA: [255,180,20],  colB: [255,60,0]  },  // centre main
+                    { spread:  0.4, widthMult: 0.65, colA: [255,140,10],  colB: [200,30,0]  },  // upper offset
+                    { spread: -0.4, widthMult: 0.55, colA: [255,200,40],  colB: [240,80,0]  },  // lower offset
+                ];
+
+                for (const tongue of tongues) {
+                    for (let i = 1; i < tLen; i++) {
+                        const t  = i / tLen;  // 0=oldest tail, 1=near rock
+                        const p0 = a.trail[i-1];
+                        const p1 = a.trail[i];
+                        const off = tongue.spread * a.size * (1-t) * 0.5;
+                        const x0 = p0.x + px*off, y0 = p0.y + py*off;
+                        const x1 = p1.x + px*off, y1 = p1.y + py*off;
+
+                        ctx.beginPath();
+                        ctx.moveTo(x0, y0);
+                        ctx.lineTo(x1, y1);
+
+                        // Colour: bright orange-yellow near rock, deep red at tail
+                        const [rA,gA,bA] = tongue.colA;
+                        const [rB,gB,bB] = tongue.colB;
+                        const r = Math.round(rA + (rB-rA)*(1-t));
+                        const g = Math.round(gA + (gB-gA)*(1-t));
+                        const b = Math.round(bA + (bB-bA)*(1-t));
+                        const alpha = t * 0.88;
+                        ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+                        ctx.lineWidth   = a.size * tongue.widthMult * t * 0.52;
+                        ctx.lineCap     = 'round';
+                        ctx.stroke();
                     }
-                    ctx.lineWidth=a.size*0.38*t;
-                    ctx.lineCap='round';
-                    ctx.shadowColor='rgba(255,120,0,0.55)';
-                    ctx.shadowBlur=a.size*0.25*t;
-                    ctx.stroke();
                 }
-                ctx.shadowBlur=0;
+
+                // Accent streaks — a couple of thin cyan/blue dashes near the tail
+                // (matches the blue streaks in the reference image)
+                if (!this._isMobile && tLen > 4) {
+                    const accentColors = ['rgba(120,210,255,0.55)', 'rgba(180,100,255,0.40)'];
+                    for (let ac = 0; ac < 2; ac++) {
+                        const offset = (ac === 0 ? 0.7 : -0.85) * a.size * 0.5;
+                        const iStart = Math.floor(tLen * 0.15);
+                        const iEnd   = Math.floor(tLen * 0.55);
+                        if (iEnd <= iStart) continue;
+                        const p0 = a.trail[iStart];
+                        const p1 = a.trail[Math.min(iEnd, tLen-1)];
+                        ctx.beginPath();
+                        ctx.moveTo(p0.x + px*offset, p0.y + py*offset);
+                        ctx.lineTo(p1.x + px*offset*1.3, p1.y + py*offset*1.3);
+                        ctx.strokeStyle = accentColors[ac];
+                        ctx.lineWidth   = a.size * 0.09;
+                        ctx.lineCap     = 'round';
+                        ctx.stroke();
+                    }
+                }
+
                 ctx.restore();
             }
 
-            // Rock body
+            // ── ROCK BODY ───────────────────────────────────────────────────
+            // Reference image: grey-brown rocky sphere with lighter face,
+            // darker edges/craters, and a warm yellow-orange rim glow from heat.
             ctx.save();
-            ctx.translate(a.x,a.y); ctx.rotate(a.rot);
+            ctx.translate(a.x, a.y);
+            ctx.rotate(a.rot);
 
+            // Build the rocky outline path
             ctx.beginPath();
-            ctx.moveTo(a.pts[0].x,a.pts[0].y);
-            for (let i=1;i<a.pts.length;i++) ctx.lineTo(a.pts[i].x,a.pts[i].y);
+            ctx.moveTo(a.pts[0].x, a.pts[0].y);
+            for (let i = 1; i < a.pts.length; i++) ctx.lineTo(a.pts[i].x, a.pts[i].y);
             ctx.closePath();
 
-            // Glowing hot rock — vivid orange lava-core
-            const grad=ctx.createRadialGradient(-a.size*0.2,-a.size*0.15,0,0,0,a.size);
-            grad.addColorStop(0,  'rgba(255,240,180,1.00)');  // white-orange hot core
-            grad.addColorStop(0.2,'rgba(255,180,40,0.98)');   // bright orange
-            grad.addColorStop(0.5,'rgba(220,80,5,0.95)');     // vivid orange-red
-            grad.addColorStop(0.8,'rgba(100,30,5,0.92)');     // dark orange-brown
-            grad.addColorStop(1,  'rgba(30,10,2,0.88)');
-            ctx.fillStyle=grad; ctx.fill();
+            // Base fill: grey-brown rock — radial gradient from lighter face to dark edge
+            // Matches the sandy/grey tones in the reference image exactly
+            const grad = ctx.createRadialGradient(
+                -a.size*0.22, -a.size*0.18, a.size*0.05,  // highlight off-center
+                 0, 0, a.size
+            );
+            grad.addColorStop(0,    '#C8B89A');  // warm light grey (lit face)
+            grad.addColorStop(0.25, '#A89070');  // mid sandy-grey
+            grad.addColorStop(0.55, '#7A6250');  // darker grey-brown
+            grad.addColorStop(0.80, '#4A3828');  // dark brown edge
+            grad.addColorStop(1.0,  '#2A1C12');  // near-black rim
+            ctx.fillStyle = grad;
+            ctx.fill();
 
-            // Outer orange glow halo
-            ctx.shadowColor='rgba(255,120,0,1.0)';
-            ctx.shadowBlur=a.size*1.1;
-            ctx.strokeStyle='rgba(255,160,20,0.92)';
-            ctx.lineWidth=1.8; ctx.stroke();
-            ctx.shadowBlur=0;
+            // Warm orange-yellow rim glow (heat from entering atmosphere)
+            // Drawn as a stroke so it's cheap — no blur needed
+            ctx.strokeStyle = 'rgba(255,160,20,0.80)';
+            ctx.lineWidth   = Math.max(1.2, a.size * 0.08);
+            ctx.stroke();
 
-            // Inner highlight streak
+            // Surface cracks — thin dark lines across the face for texture
             ctx.save();
-            ctx.globalAlpha=0.55;
-            ctx.strokeStyle='rgba(255,230,120,0.80)';
-            ctx.lineWidth=1.0;
+            ctx.globalAlpha = 0.45;
+            ctx.strokeStyle = '#3A2518';
+            ctx.lineWidth   = Math.max(0.5, a.size * 0.025);
             ctx.beginPath();
-            ctx.moveTo(-a.size*0.35,-a.size*0.18);
-            ctx.quadraticCurveTo(-a.size*0.1,-a.size*0.10,a.size*0.15,-a.size*0.05);
+            ctx.moveTo(-a.size*0.30,  a.size*0.08);
+            ctx.lineTo(-a.size*0.05, -a.size*0.05);
+            ctx.lineTo( a.size*0.20,  a.size*0.12);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(-a.size*0.10, -a.size*0.20);
+            ctx.lineTo( a.size*0.05, -a.size*0.02);
             ctx.stroke();
             ctx.restore();
 
-            // Craters
-            const cr=a.size*0.12;
-            ctx.fillStyle='rgba(15,8,2,0.65)';
-            ctx.beginPath(); ctx.arc(-a.size*0.18,-a.size*0.06,cr,0,Math.PI*2); ctx.fill();
-            if (a.pts.length>=8){
-                ctx.beginPath(); ctx.arc(a.size*0.20,a.size*0.05,cr*0.7,0,Math.PI*2); ctx.fill();
-            }
+            // Highlight streak on lit side (upper-left, matches reference image)
+            ctx.save();
+            ctx.globalAlpha = 0.50;
+            ctx.strokeStyle = '#D8C8AA';
+            ctx.lineWidth   = Math.max(0.8, a.size * 0.035);
+            ctx.lineCap     = 'round';
+            ctx.beginPath();
+            ctx.moveTo(-a.size*0.32, -a.size*0.22);
+            ctx.quadraticCurveTo(-a.size*0.10, -a.size*0.12, a.size*0.08, -a.size*0.06);
+            ctx.stroke();
             ctx.restore();
+
+            // Craters — dark filled circles with a thin lighter rim
+            if (a.craters) {
+                for (const cr of a.craters) {
+                    // Dark crater pit
+                    ctx.fillStyle = 'rgba(28,16,8,0.72)';
+                    ctx.beginPath();
+                    ctx.arc(cr.x, cr.y, cr.r, 0, Math.PI*2);
+                    ctx.fill();
+                    // Lighter rim (catches the light)
+                    ctx.strokeStyle = 'rgba(160,130,90,0.50)';
+                    ctx.lineWidth   = Math.max(0.4, cr.r * 0.25);
+                    ctx.beginPath();
+                    ctx.arc(cr.x - cr.r*0.15, cr.y - cr.r*0.15, cr.r, 0, Math.PI*2);
+                    ctx.stroke();
+                }
+            }
+
+            ctx.restore();  // rock body transform
         }
-        ctx.restore();
+
+        ctx.restore();  // outer save
     }
 
     _drawBurnEffects(ctx) {
@@ -922,8 +1081,8 @@ export default class SpaceTheme {
             for (const p of b.particles) {
                 if (p.r < 0.3 || p.a < 0.02) continue;
                 ctx.globalAlpha = Math.max(0, Math.min(1, p.a));
-                ctx.shadowColor = `rgba(${p.color},0.90)`;
-                ctx.shadowBlur  = p.r > 6 ? 14 : 8;
+
+                ctx.shadowBlur = 0;
                 ctx.fillStyle   = `rgba(${p.color},1)`;
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, Math.max(0.3, p.r), 0, Math.PI * 2);
@@ -931,7 +1090,7 @@ export default class SpaceTheme {
             }
         }
         ctx.globalAlpha = 1;
-        ctx.shadowBlur  = 0;
+        ctx.shadowBlur = 0;
         ctx.restore();
     }
 
@@ -947,7 +1106,7 @@ export default class SpaceTheme {
                 ctx.globalAlpha = Math.max(0, ra);
                 ctx.strokeStyle = `rgba(${col},1)`;
                 ctx.lineWidth = (3.5 * (1 - p) + 0.5);
-                ctx.shadowBlur = 18; ctx.shadowColor = `rgba(${col},0.85)`;
+                ctx.shadowBlur = 0;
                 ctx.beginPath(); ctx.arc(imp.ring.x, imp.ring.y, rr, 0, Math.PI*2); ctx.stroke();
                 ctx.shadowBlur = 0;
                 continue;
@@ -957,11 +1116,11 @@ export default class SpaceTheme {
                 if (p.a < 0.02 || p.r < 0.3) continue;
                 ctx.globalAlpha = Math.max(0, p.a);
                 ctx.fillStyle = `rgba(${p.color},1)`;
-                ctx.shadowBlur = 8; ctx.shadowColor = `rgba(${p.color},0.85)`;
+                ctx.shadowBlur = 0;
                 ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.3, p.r), 0, Math.PI*2); ctx.fill();
             }
         }
-        ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.restore();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0;ctx.restore();
     }
 }
 

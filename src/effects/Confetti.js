@@ -162,8 +162,8 @@ export default class Confetti {
                 const twinkle = 0.5 + 0.5 * Math.sin(p.sparkle);
                 ctx.globalAlpha = Math.max(0, p.life * twinkle);
                 ctx.fillStyle = p.color;
-                ctx.shadowColor = p.color;
-                ctx.shadowBlur = 6;
+
+                ctx.shadowBlur = 0;
                 ctx.beginPath();
                 ctx.arc(0, 0, p.width / 2, 0, Math.PI * 2);
                 ctx.fill();

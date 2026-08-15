@@ -59,7 +59,7 @@ export default class VisualFX {
         // FIX 3: Set shadow state ONCE before the loop, not per-particle.
         // Grouping by color and setting shadow once saves ~180 GPU state changes/frame.
         ctx.save();
-        ctx.shadowBlur = 2;
+        ctx.shadowBlur = 0;
 
         // Group sparks by color to minimize state switches
         const byColor = new Map();
@@ -70,7 +70,7 @@ export default class VisualFX {
 
         for (const [color, group] of byColor) {
             ctx.fillStyle   = color;
-            ctx.shadowColor = color;
+
             for (const s of group) {
                 ctx.globalAlpha = Math.max(0, s.life);
                 ctx.beginPath();

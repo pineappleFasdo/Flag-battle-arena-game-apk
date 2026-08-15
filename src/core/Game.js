@@ -832,8 +832,8 @@ export default class Game {
         // hard-cap so elim / low-count rounds never spawn oversized flags.
         const rawW = Math.max(9, spacing * 0.85);
         const maxW = this.isFinalMode
-            ? 14
-            : (this.totalCountries <= 40 ? 16 : (this.totalCountries <= 100 ? 20 : 24));
+            ? 17
+            : (this.totalCountries <= 40 ? 20 : (this.totalCountries <= 100 ? 25 : 30));
         this._nextFlagW = Math.min(rawW, maxW);
         this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
@@ -936,7 +936,7 @@ export default class Game {
         );
         this._nextSpawnPositions = positions;
         const rawW0 = Math.max(9, spacing * 0.85);
-        const maxW0 = this.totalCountries <= 40 ? 16 : (this.totalCountries <= 100 ? 20 : 24);
+        const maxW0 = this.totalCountries <= 40 ? 20 : (this.totalCountries <= 100 ? 25 : 30);
         this._nextFlagW = Math.min(rawW0, maxW0);
         this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
@@ -2105,7 +2105,7 @@ export default class Game {
             this._lbTicker = {
                 x           : null,    // null = not yet started
                 speed       : 1.20,    // px/frame — readable at 60fps
-                nextShowAt  : now + 20000 + Math.random() * 30000,  // first appearance: 20-50s in
+                nextShowAt  : now + 90000 + Math.random() * 60000,  // first appearance: 1.5-2.5 min in
                 active      : false,
                 textWidth   : 0,
                 alpha       : 0,
@@ -2122,7 +2122,7 @@ export default class Game {
             const flashActive = this._lbSegmentFlashQueue?.length > 0;
             if (flashActive) {
                 // Defer by 8-12s to avoid overlap
-                tk.nextShowAt = now + 8000 + Math.random() * 4000;
+                tk.nextShowAt = now + 20000 + Math.random() * 10000;  // defer longer on conflict
                 return;
             }
             tk.active    = true;
@@ -2172,11 +2172,12 @@ export default class Game {
         ctx.font = `700 ${fs}px 'Orbitron', system-ui, sans-serif`;
         const fullW = ctx.measureText(text).width;
 
-        // ── Initialize scroll x ───────────────────────────────────────────────
-        if (tk.x === null || tk.textWidth !== fullW) {
+        // ── Initialize scroll x (only on fresh start, never while scrolling) ──
+        if (tk.x === null) {
             tk.x = lbX + lbW;     // start just off the right edge
-            tk.textWidth = fullW;
         }
+        // Always update textWidth so the exit check uses the current measurement
+        tk.textWidth = fullW;
 
         // ── Fade in ───────────────────────────────────────────────────────────
         if (tk.fadeState === 'in') {
@@ -2205,9 +2206,11 @@ export default class Game {
                 // Done — schedule next appearance after a random gap
                 tk.active      = false;
                 tk.x           = null;
-                tk.nextShowAt  = now + 15000 + Math.random() * 40000;
-                ctx.restore();
-                return;
+                tk.nextShowAt  = now + 120000 + Math.random() * 120000;  // 2-4 min between appearances
+                // ctx.restore() called below at end of function — don't early-return
+                // or the panel/text drawing below will run with wrong alpha.
+                // Just mark inactive and fall through — globalAlpha 0 hides it.
+                tk.alpha = 0;
             }
         }
 
@@ -2250,10 +2253,10 @@ export default class Game {
         ctx.fillStyle    = '#FFFFFF';
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor  = 'rgba(0,0,0,0.6)';
-        ctx.shadowBlur   = 4;
+
+        ctx.shadowBlur = 0;
         ctx.fillText('5H', lbX + badgeW / 2, tickerY + tickerH / 2);
-        ctx.shadowBlur   = 0;
+        ctx.shadowBlur = 0;
 
         // Clip scrolling text to panel width (exclude badge)
         const textZoneX = lbX + badgeW + 4;
@@ -2268,10 +2271,10 @@ export default class Game {
         ctx.fillStyle    = '#E0D0FF';
         ctx.textAlign    = 'left';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor  = 'rgba(255, 107, 53, 0.35)';
-        ctx.shadowBlur   = 5;
+
+        ctx.shadowBlur = 0;
         ctx.fillText(text, tk.x, tickerY + tickerH / 2);
-        ctx.shadowBlur   = 0;
+        ctx.shadowBlur = 0;
 
         ctx.restore(); // pop clip
         ctx.restore(); // pop globalAlpha
@@ -2359,8 +2362,8 @@ export default class Game {
         ctx.save();
         ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
-        ctx.shadowColor = "rgba(0,0,0,0.75)";
-        ctx.shadowBlur = 6;
+
+        ctx.shadowBlur = 0;
         ctx.fillStyle = "#91A7C9";
 
         // Fit font to available width
@@ -2422,8 +2425,8 @@ export default class Game {
 
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
-        ctx.shadowColor  = "rgba(0,0,0,0.85)";
-        ctx.shadowBlur   = 10;
+
+        ctx.shadowBlur = 0;
 
         const titleSize = Math.min(this._lw * 0.028, 22);
         ctx.font = gf(800, titleSize);
@@ -2433,15 +2436,15 @@ export default class Game {
         const pulse    = 1 + 0.04 * Math.sin(timer * 0.1);
         const iconSize = Math.min(this._lw * 0.08, 52) * pulse;
         ctx.font       = `${iconSize}px system-ui, Apple Color Emoji, sans-serif`;
-        ctx.shadowBlur = 14;
+        ctx.shadowBlur = 0;
         ctx.fillText(this.isFinalMode ? "🌋" : ev.icon, cx, cy - 4);
 
         // Event name badge strip
         const eventSize = Math.min(this._lw * 0.048, 36);
         ctx.font = gf(900, eventSize);
         ctx.fillStyle   = this.isFinalMode ? "#FFC83D" : "#F4F7FF";
-        ctx.shadowColor = "rgba(61, 124, 255, 0.35)";
-        ctx.shadowBlur  = 12;
+
+        ctx.shadowBlur = 0;
         ctx.fillText(
             this.isFinalMode ? `EARTHQUAKE  ·  ${this._finalists.length} FLAGS` : ev.name,
             cx, cy + cardH * 0.28
@@ -2462,15 +2465,15 @@ export default class Game {
         ctx.save();
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
-        ctx.shadowColor  = "rgba(0,0,0,0.90)";
-        ctx.shadowBlur   = 10;
+
+        ctx.shadowBlur = 0;
 
         // Broadcast transition label
         const labelSize = Math.min(this._lw * 0.045, 28);
         ctx.font = gf(800, labelSize);
         ctx.fillStyle   = "#38D5FF";
-        ctx.shadowColor = "rgba(61, 124, 255, 0.40)";
-        ctx.shadowBlur  = 10;
+
+        ctx.shadowBlur = 0;
         ctx.fillText("NEXT BATTLE", cx, cy - 100);
 
         // Event badge — dark-blue panel with electric-blue border
@@ -2490,7 +2493,7 @@ export default class Game {
         const evNameSize = Math.min(this._lw * 0.038, 20);
         ctx.font = gf(700, evNameSize);
         ctx.fillStyle   = "#F4F7FF";
-        ctx.shadowBlur  = 0;
+        ctx.shadowBlur = 0;
         ctx.fillText(
             this.isFinalMode
                 ? `🌋  EARTHQUAKE  ·  ${this._finalists.length} FLAGS`
@@ -2502,8 +2505,8 @@ export default class Game {
         const countSize = Math.min(this._lw * 0.032, 18);
         ctx.font = gf(600, countSize);
         ctx.fillStyle   = "#91A7C9";
-        ctx.shadowColor = "rgba(0,0,0,0.8)";
-        ctx.shadowBlur  = 6;
+
+        ctx.shadowBlur = 0;
         ctx.fillText(
             this.isFinalMode
                 ? "ELIMINATION ROUND"
@@ -2536,12 +2539,12 @@ export default class Game {
 
         ctx.font = gf(900, numSize);
         ctx.fillStyle   = "#F4F7FF";
-        ctx.shadowColor = "rgba(0,0,0,0.85)";
-        ctx.shadowBlur  = 16;
+
+        ctx.shadowBlur = 0;
         ctx.fillText(String(this.restartCountdown), 0, 0);
         // Subtle blue glow pass
-        ctx.shadowColor = "rgba(61, 124, 255, 0.40)";
-        ctx.shadowBlur  = 28;
+
+        ctx.shadowBlur = 0;
         ctx.fillText(String(this.restartCountdown), 0, 0);
         ctx.restore();
 
@@ -2594,8 +2597,8 @@ export default class Game {
         // Use TOP baseline so stacked elements never overlap
         ctx.textAlign    = "center";
         ctx.textBaseline = "top";
-        ctx.shadowColor  = "rgba(0,0,0,0.9)";
-        ctx.shadowBlur   = 12;
+
+        ctx.shadowBlur = 0;
 
         // Vertical stack (clear separation, video match):
         //   ELIMINATED
@@ -2627,8 +2630,8 @@ export default class Game {
 
         if (img && img.complete && img.naturalWidth > 0) {
             ctx.save();
-            ctx.shadowColor = "rgba(0,0,0,0.7)";
-            ctx.shadowBlur  = 16;
+
+            ctx.shadowBlur = 0;
             ctx.beginPath();
             if (typeof ctx.roundRect === "function") {
                 ctx.roundRect(flagX - 2, flagY - 2, flagW + 4, flagH + 4, 5);
@@ -2664,7 +2667,7 @@ export default class Game {
         // Country name — clearly BELOW the flag
         ctx.font      = gf(800, nameSize);
         ctx.fillStyle = "#F4F7FF";
-        ctx.shadowBlur = 10;
+        ctx.shadowBlur = 0;
         let name = (item.country?.name ?? "").toUpperCase();
         while (name.length > 2 && ctx.measureText(name).width > R * 1.4) {
             name = name.slice(0, -1);
@@ -2675,7 +2678,7 @@ export default class Game {
         // Remaining count — below country name
         ctx.font      = gf(700, remSize);
         ctx.fillStyle = "#FFC83D";
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = 0;
         const left = item.remaining;
         ctx.fillText(
             `${left} FLAG${left === 1 ? "" : "S"} LEFT`,
@@ -2712,8 +2715,8 @@ export default class Game {
         ctx.globalAlpha = alpha;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.shadowColor = "rgba(0,0,0,0.85)";
-        ctx.shadowBlur = 14;
+
+        ctx.shadowBlur = 0;
 
         // Soft pad so text reads over busy flags
         ctx.globalAlpha = alpha * 0.35;
@@ -2731,7 +2734,7 @@ export default class Game {
         const subSize = Math.min(R * 0.075, 16);
         ctx.font = gf(700, subSize);
         ctx.fillStyle = "#FFC83D";
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = 0;
         ctx.fillText(
             `${left} FLAG${left === 1 ? "" : "S"} LEFT`,
             cx,
@@ -2776,8 +2779,8 @@ export default class Game {
         ctx.scale(scale, scale);
         ctx.translate(-cx, -cy);
 
-        ctx.shadowColor = "rgba(255, 83, 104, 0.45)";
-        ctx.shadowBlur  = 20;
+
+        ctx.shadowBlur = 0;
         ctx.fillStyle   = "#101D38";
         ctx.beginPath();
         if (typeof ctx.roundRect === "function") ctx.roundRect(cardX, cardY, cardW, cardH, 12);
@@ -2786,7 +2789,7 @@ export default class Game {
         ctx.strokeStyle = "#FF5368";
         ctx.lineWidth   = 2;
         ctx.stroke();
-        ctx.shadowBlur  = 0;
+        ctx.shadowBlur = 0;
 
         const bannerH = Math.round(cardH * 0.32);
         const grad    = ctx.createLinearGradient(cardX, cardY, cardX + cardW, cardY);
@@ -2803,8 +2806,8 @@ export default class Game {
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
         ctx.fillStyle    = "#F4F7FF";
-        ctx.shadowColor  = "rgba(0,0,0,0.90)";
-        ctx.shadowBlur   = 6;
+
+        ctx.shadowBlur = 0;
         ctx.fillText("ELIMINATED", cx, cardY + bannerH / 2);
         ctx.shadowBlur = 0;
 
@@ -2838,8 +2841,8 @@ export default class Game {
         ctx.textAlign    = "left";
         ctx.textBaseline = "middle";
         ctx.fillStyle    = "#FFFFFF";
-        ctx.shadowColor  = "rgba(0,0,0,0.95)";
-        ctx.shadowBlur   = 9;
+
+        ctx.shadowBlur = 0;
 
         let name = this._elimShowCountry?.name ?? "";
         while (name.length > 2 && ctx.measureText(name).width > maxNameW) name = name.slice(0, -1);
@@ -2850,7 +2853,7 @@ export default class Game {
         const remSize  = Math.min(cardW * 0.060, 13);
         ctx.font = gf(600, remSize);
         ctx.fillStyle = "rgba(255,180,180,0.85)";
-        ctx.shadowBlur = 5;
+        ctx.shadowBlur = 0;
         ctx.fillText(remText, nameX, bodyTop + bodyH / 2 + nameSize * 1.5);
 
         ctx.restore();
@@ -2891,8 +2894,8 @@ export default class Game {
         ctx.arc(ax, ay, R, 0, Math.PI * 2);
         ctx.strokeStyle = `rgba(255, 60, 60, ${0.80 + pulse * 0.15})`;
         ctx.lineWidth   = 3;
-        ctx.shadowColor = `rgba(255, 40, 40, 0.7)`;
-        ctx.shadowBlur  = 22 + pulse * 10;
+
+        ctx.shadowBlur = 0;
         ctx.stroke();
         ctx.restore();
 
@@ -2924,15 +2927,15 @@ export default class Game {
         // ⚡ icon
         ctx.font        = `${iconSize}px system-ui, Apple Color Emoji, sans-serif`;
         ctx.fillStyle   = "#FF4040";
-        ctx.shadowColor = "rgba(255, 60, 60, 0.8)";
-        ctx.shadowBlur  = 18 + pulse * 10;
+
+        ctx.shadowBlur = 0;
         ctx.fillText("⚡", ax, y);
         y += iconSize * 0.55 + gap * 0.4;
 
         // SUDDEN DEATH heading
         ctx.font        = gf(900, headSize);
         ctx.fillStyle   = "#FF4040";
-        ctx.shadowBlur  = 16 + pulse * 8;
+        ctx.shadowBlur = 0;
         ctx.fillText("SUDDEN DEATH", ax, y);
         y += headSize + gap * 0.6;
 
@@ -2940,14 +2943,14 @@ export default class Game {
         const winsLabel = `${flags.length} COUNTRIES TIED ON ${wins} WIN${wins === 1 ? "" : "S"}`;
         ctx.font      = gf(700, subSize);
         ctx.fillStyle = "#FFB0B0";
-        ctx.shadowBlur = 8;
+        ctx.shadowBlur = 0;
         ctx.fillText(winsLabel, ax, y);
         y += subSize + gap * 0.9;
 
         // Individual country names
         ctx.font      = gf(600, nameSize);
         ctx.fillStyle = "#F4F7FF";
-        ctx.shadowBlur = 6;
+        ctx.shadowBlur = 0;
         for (const name of nameLines) {
             ctx.fillText(name, ax, y);
             y += nameSize + gap * 0.4;
@@ -2977,8 +2980,8 @@ export default class Game {
         ctx.fillStyle   = "#FFFFFF";
         ctx.textAlign   = "center";
         ctx.textBaseline = "middle";
-        ctx.shadowColor = "rgba(0,0,0,0.8)";
-        ctx.shadowBlur  = 6;
+
+        ctx.shadowBlur = 0;
         ctx.fillText("ONE ROUND · WINNER TAKES ALL", ax, stripY);
         ctx.restore();
     }
@@ -3030,8 +3033,8 @@ export default class Game {
         ctx.arc(ax, ay, R, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(244, 247, 255, 0.85)";
         ctx.lineWidth = 3;
-        ctx.shadowColor = "rgba(61, 124, 255, 0.45)";
-        ctx.shadowBlur = 18;
+
+        ctx.shadowBlur = 0;
         ctx.stroke();
         ctx.restore();
 
@@ -3061,8 +3064,8 @@ export default class Game {
         ctx.save();
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.shadowColor = "rgba(0,0,0,0.85)";
-        ctx.shadowBlur = 10;
+
+        ctx.shadowBlur = 0;
         const topSize = Math.min(R * 0.085, 17);
         ctx.font = gf(800, topSize);
         ctx.fillStyle = "#FFC83D";
@@ -3097,15 +3100,15 @@ export default class Game {
         // Trophy emoji
         ctx.font = gf(900, trophySize);
         ctx.fillStyle = "#FFC83D";
-        ctx.shadowColor = "rgba(255, 200, 61, 0.55)";
-        ctx.shadowBlur = 16 + pulse * 8;
+
+        ctx.shadowBlur = 0;
         ctx.fillText("🏆", ax, y);
         y += trophySize + gap * 0.5;
 
         // Title: 5H Grand Final vs generic Time-Up champion
         ctx.font = gf(900, titleSize);
         ctx.fillStyle = "#FFC83D";
-        ctx.shadowBlur = 12;
+        ctx.shadowBlur = 0;
         const champTitle = (this.sessionMode && this.sessionMode.inGrandFinal) || this._currentEventId === "long_battle"
             ? "5H GRAND FINAL CHAMPION"
             : "TIME UP  —  CHAMPION";
@@ -3116,8 +3119,8 @@ export default class Game {
         const flagX = ax - flagW / 2;
         const flagY = y;
         const pad = Math.max(4, flagW * 0.04);
-        ctx.shadowColor = "rgba(0,0,0,0.55)";
-        ctx.shadowBlur = 14;
+
+        ctx.shadowBlur = 0;
         ctx.fillStyle = "#101D38";
         ctx.beginPath();
         if (typeof ctx.roundRect === "function") {
@@ -3151,8 +3154,8 @@ export default class Game {
         // Country name — clearly below the flag
         ctx.font = gf(800, nameSize);
         ctx.fillStyle = "#F4F7FF";
-        ctx.shadowColor = "rgba(0,0,0,0.9)";
-        ctx.shadowBlur = 12;
+
+        ctx.shadowBlur = 0;
         let displayName = name;
         while (displayName.length > 2 && ctx.measureText(displayName).width > R * 1.5) {
             displayName = displayName.slice(0, -1);
@@ -3163,14 +3166,14 @@ export default class Game {
         // 1 WIN
         ctx.font = gf(800, winSize);
         ctx.fillStyle = "#FFC83D";
-        ctx.shadowBlur = 10;
+        ctx.shadowBlur = 0;
         ctx.fillText("1 WIN", ax, y);
         y += winSize + gap * 0.9;
 
         // Countdown / permanent label
         ctx.font = gf(700, cdSize);
         ctx.fillStyle = "#91A7C9";
-        ctx.shadowBlur = 6;
+        ctx.shadowBlur = 0;
         if (this._champPermanent) {
             ctx.fillText("FINAL RESULT  ·  NO NEXT ROUND", ax, y);
         } else {

@@ -154,8 +154,8 @@ export default class BottomTrayRenderer {
         ctx.font         = gf(700, labelSize);
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor  = 'rgba(255,80,0,0.45)';
-        ctx.shadowBlur   = 5;
+
+        ctx.shadowBlur = 0;
         ctx.fillText(
             n > 0
                 ? `☄️  Asteroid: ${n} eliminated`
@@ -185,8 +185,8 @@ export default class BottomTrayRenderer {
         ctx.font         = gf(700, labelSize);
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor  = 'rgba(255,80,0,0.55)';
-        ctx.shadowBlur   = 6;
+
+        ctx.shadowBlur = 0;
         ctx.fillText('☄️  Eliminated by Asteroid Shower', cw / 2, trayTop + headerH / 2);
         ctx.shadowBlur = 0;
 

@@ -131,13 +131,13 @@ export default class LeaderboardRenderer {
 
         // ── Outer glow (subtle pulse) ─────────────────────────────────────────
         const pulse = 0.5 + 0.5 * Math.sin(this._pulsePhase * Math.PI * 2);
-        ctx.shadowColor = `rgba(61, 124, 255, ${0.20 + 0.10 * pulse})`;
-        ctx.shadowBlur  = 16 + 6 * pulse;
+
+        ctx.shadowBlur = 0;
         this._rrect(ctx, x - 1, y - 1, w + 2, totalH + 2, radius + 1);
         ctx.strokeStyle = `rgba(61, 124, 255, ${0.55 + 0.15 * pulse})`;
         ctx.lineWidth   = 1.5;
         ctx.stroke();
-        ctx.shadowBlur  = 0;
+        ctx.shadowBlur = 0;
 
         // ── Panel body — deep navy with subtle gradient ───────────────────────
         const panelGrad = ctx.createLinearGradient(x, y, x, y + totalH);
@@ -194,8 +194,8 @@ export default class LeaderboardRenderer {
         ctx.font         = gf(700, hFontSize);
         ctx.textAlign    = 'center';
         ctx.textBaseline = 'middle';
-        ctx.shadowColor  = 'rgba(61,124,255,0.5)';
-        ctx.shadowBlur   = 8;
+
+        ctx.shadowBlur = 0;
         ctx.fillText(label, x + w / 2, y + headerH / 2);
         ctx.shadowBlur = 0;
 
@@ -241,8 +241,8 @@ export default class LeaderboardRenderer {
                 ctx.arc(dotX + dotR, dotY, active ? dotR * 1.4 : dotR, 0, Math.PI * 2);
                 if (active) {
                     ctx.fillStyle = '#38D5FF';
-                    ctx.shadowColor = 'rgba(56,213,255,0.6)';
-                    ctx.shadowBlur  = 6;
+
+                    ctx.shadowBlur = 0;
                 } else {
                     ctx.fillStyle = 'rgba(61,124,255,0.25)';
                     ctx.shadowBlur = 0;
@@ -432,8 +432,8 @@ export default class LeaderboardRenderer {
         ctx.textBaseline = 'middle';
 
         if (scale > 1.05 || rank <= 3) {
-            ctx.shadowColor = glowColor;
-            ctx.shadowBlur  = scale > 1.05 ? 12 : 6;
+
+            ctx.shadowBlur = 0;
         }
         ctx.fillText(label, rightEdge, midY);
         ctx.restore();
