@@ -12,26 +12,40 @@ import ReverseGravityEvent from "./events/ReverseGravityEvent.js";
 import BlackHoleEvent      from "./events/BlackHoleEvent.js";
 import SpinCycleEvent      from "./events/SpinCycleEvent.js";
 import BilliardBreakEvent  from "./events/BilliardBreakEvent.js";
-import PulsarEvent         from "./events/PulsarEvent.js";
 import OrbitDrainEvent     from "./events/OrbitDrainEvent.js";
+// ── New events ────────────────────────────────────────────────────────────────
+import BlenderEvent        from "./events/BlenderEvent.js";
+import TidalWaveEvent      from "./events/TidalWaveEvent.js";
+import ShockwaveEvent      from "./events/ShockwaveEvent.js";
+import QuicksandEvent      from "./events/QuicksandEvent.js";
+import PinballEvent        from "./events/PinballEvent.js";
+import DriftEvent          from "./events/DriftEvent.js";
+import GravityWellsEvent   from "./events/GravityWellsEvent.js";
+import StampedeEvent       from "./events/StampedeEvent.js";
 
 // Qualifying pool only — LAST STANDING is final-exclusive (not in rotation)
 const ALL_EVENTS = [
-    ClassicEvent,
+//     ClassicEvent,
     TurboEvent,
     LowGravityEvent,
     EarthquakeEvent,
-// ShrinkingArenaEvent,
+ShrinkingArenaEvent,
     DoubleHoleEvent,
     MagnetCoreEvent,
     WindGustEvent,
     BouncyEvent,
     ReverseGravityEvent,
     BlackHoleEvent,
-    SpinCycleEvent,
-    BilliardBreakEvent,
-    PulsarEvent,
-    OrbitDrainEvent,
+    // SpinCycleEvent,
+    // BilliardBreakEvent,
+    // OrbitDrainEvent,
+    // ── New events ──────────────────────────────────────────────────────────
+    // BlenderEvent,
+    TidalWaveEvent,
+    ShockwaveEvent,
+    // DriftEvent,
+    // GravityWellsEvent,
+    StampedeEvent,
 ];
 
 export default class EventManager {

@@ -294,6 +294,7 @@ export default class Game {
      * eventId matches the id defined in SELECTION_EVENTS in main.js.
      */
     startEvent(eventId, themeId = DEFAULT_THEME) {
+        try { this.audio.stopWinnerLoop(); } catch (_) {}
         this._currentEventId = eventId;
         this.theme = THEMES[themeId] ?? THEMES[DEFAULT_THEME];
 
@@ -356,12 +357,14 @@ export default class Game {
 
         if (isTie && !winner.isSilent) {
             this.confetti.start(this._lw / 2, this._lh * 0.4, 130);
-            this.audio.playWinner();
+            try { this.audio.stopWinnerLoop(); } catch (_) {}
+            try { this.audio.playPhase('champion', { loop: true }); } catch (_) {}
             const names = (winner.countries ?? []).map(c => c.name).join(" and ");
             if (names) this.audio.speak(`It's a tie between ${names}!`);
         } else if (!isTie) {
             this.confetti.start(this._lw / 2, this._lh * 0.36, 150);
-            this.audio.playWinner();
+            try { this.audio.stopWinnerLoop(); } catch (_) {}
+            try { this.audio.playPhase('champion', { loop: true }); } catch (_) {}
             this.audio.speak(`${winner.country.name} wins!`);
 
             // Classic only: remove winner from pool so they sit out until recycle
@@ -417,9 +420,9 @@ export default class Game {
                     this._champDisplayStart = Date.now();
                     this._champCountdownRemain = this._champCountdownSec;
                     this.gameState = "GRAND_CHAMPION";
-                    this.audio.playPhase("champion");
                     this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
-                    this.audio.playWinner();
+                    try { this.audio.stopWinnerLoop(); } catch (_) {}
+                    try { this.audio.playPhase("champion", { loop: true }); } catch (_) {}
                     this.audio.speak(
                         `${country.name} wins the sudden death and is the Highest Winner Champion!`
                     );
@@ -549,8 +552,8 @@ export default class Game {
         // Continuous confetti + looping winner/celebration audio for the whole hold
         this.confetti.start(this._lw / 2, this._lh * 0.08, 220, { fromTop: true });
         try { this.audio.stopBGM(); } catch (_) {}
+        try { this.audio.stopWinnerLoop(); } catch (_) {}
         try { this.audio.playPhase("champion", { loop: true }); } catch (_) {}
-        try { this.audio.playWinner(); } catch (_) {}
         try { this.audio.playClap(); } catch (_) {}
         try { this.audio.playConfetti(); } catch (_) {}
         try {
@@ -605,9 +608,9 @@ export default class Game {
         this._champCountdownRemain = this._champCountdownSec;
         this.gameState = "GRAND_CHAMPION";
 
-        this.audio.playPhase('champion');
         this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
-        this.audio.playWinner();
+        try { this.audio.stopWinnerLoop(); } catch (_) {}
+        try { this.audio.playPhase('champion', { loop: true }); } catch (_) {}
         this.audio.speak(
             `${champ.name} is the highest winner with ${champ.wins} win${champ.wins === 1 ? "" : "s"}!`
         );
@@ -667,7 +670,8 @@ export default class Game {
 
         if (w) {
             this.confetti.start(this._lw / 2, this._lh * 0.36, 120);
-            this.audio.playWinner();
+            try { this.audio.stopWinnerLoop(); } catch (_) {}
+            try { this.audio.playPhase('champion', { loop: true }); } catch (_) {}
             this.audio.speak(
                 `Time is up! ${w.name} wins Round ${w.segment} with ${w.wins} win${w.wins === 1 ? "" : "s"}!`
             );
@@ -883,9 +887,9 @@ export default class Game {
         this._nextSpawnPositions = positions;
         // Few countries → large spacing → oversized flags that can't exit the gap.
         // Match the tighter final-mode cap so size stays consistent.
-        const rawW = Math.max(9, spacing * 0.85);
-        this._nextFlagW = Math.min(rawW, 14);
-        this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));
+        const rawW = Math.max(12, spacing * 0.95);
+        this._nextFlagW = Math.min(rawW, 19);
+        this._nextFlagH = Math.max(8, Math.round(this._nextFlagW * 0.667));
 
         this._clearAllFlags();
 
@@ -1002,12 +1006,12 @@ export default class Game {
         this._nextSpawnPositions = positions;
         // Keep flags small enough to exit the gap. Fewer countries → larger spacing;
         // hard-cap so elim / low-count rounds never spawn oversized flags.
-        const rawW = Math.max(9, spacing * 0.85);
+        const rawW = Math.max(12, spacing * 0.95);
         const maxW = this.isFinalMode
-            ? 17
-            : (this.totalCountries <= 40 ? 20 : (this.totalCountries <= 100 ? 25 : 30));
+            ? 22
+            : (this.totalCountries <= 40 ? 27 : (this.totalCountries <= 100 ? 33 : 40));
         this._nextFlagW = Math.min(rawW, maxW);
-        this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
+        this._nextFlagH = Math.max(8, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
         this._clearAllFlags();
 
@@ -1030,6 +1034,8 @@ export default class Game {
     // ── Reset ─────────────────────────────────────────────────────────────────
 
     _doReset() {
+        try { this.audio.stopWinnerLoop(); } catch (_) {}
+
         if (this.restartTimer) {
             clearTimeout(this.restartTimer);
             clearInterval(this.restartTimer);
@@ -1112,10 +1118,10 @@ export default class Game {
             this.layout.arenaX, this.layout.arenaY, spawnRadius, this.totalCountries
         );
         this._nextSpawnPositions = positions;
-        const rawW0 = Math.max(9, spacing * 0.85);
-        const maxW0 = this.totalCountries <= 40 ? 20 : (this.totalCountries <= 100 ? 25 : 30);
+        const rawW0 = Math.max(12, spacing * 0.95);
+        const maxW0 = this.totalCountries <= 40 ? 27 : (this.totalCountries <= 100 ? 33 : 40);
         this._nextFlagW = Math.min(rawW0, maxW0);
-        this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
+        this._nextFlagH = Math.max(8, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
         this.eventManager.pick();
         this._beginNextEvent();
@@ -1124,6 +1130,7 @@ export default class Game {
     // ── Countdown ─────────────────────────────────────────────────────────────
 
     _beginCountdown() {
+        try { this.audio.stopWinnerLoop(); } catch (_) {}
         if (this._champPermanent || this.gameState === "GRAND_CHAMPION") {
             console.warn("[Game] _beginCountdown blocked — champion locked");
             return;
@@ -1144,8 +1151,8 @@ export default class Game {
             this.arena.initialGapSize = 3;
             this.arena.maxGapSize     = 8;
         } else {
-            this.arena.initialGapSize = 3;  // qualifying: ~30-40s rounds with progressive open
-            this.arena.maxGapSize     = 7;
+            this.arena.initialGapSize = 2;  // was 3 — slower baseline drain between events
+            this.arena.maxGapSize     = 5;  // was 7 — less wide-open late game
         }
         this.arena.syncWalls();
 
@@ -1206,6 +1213,12 @@ export default class Game {
         this.gameState     = "PLAYING";
         this.arena.state   = "PLAYING";
         this.arena.gapSize = this.arena.initialGapSize;
+        // Barrier rim: Highest Winner Wins only (test before rolling out)
+        try {
+            if (typeof this.arena.enableRim === "function") {
+                this.arena.enableRim(!!this.isHighestWinsMode);
+            }
+        } catch (_) {}
         this.arena.syncWalls();
         this.audio.playRoundStart();
         // If championship already finished, never keep battle BGM running
@@ -1354,6 +1367,7 @@ export default class Game {
             }
 
             // Other champion screens (5H permanent / classic): short celebration then settle
+            // Keep winner fanfare looping; only stop battle BGM once
             if (!this._champBgmKilled) {
                 this._champBgmKilled = true;
                 try { this.audio.stopBGM(); } catch (_) {}
@@ -1891,10 +1905,10 @@ export default class Game {
         // Stop looping post-countdown battle BGM (qualify / elimination track)
         try { this.audio.stopBGM(); } catch (_) {}
 
-        // Celebration: short one-shot sounds only (battle BGM stays OFF)
+        // Celebration — winner fanfare loops for whole champion screen
         this.confetti.start(this._lw / 2, this._lh * 0.08, 220, { fromTop: true });
-        this.audio.playPhase('champion', { loop: false });
-        this.audio.playWinner();
+        try { this.audio.stopWinnerLoop(); } catch (_) {}
+        try { this.audio.playPhase('champion', { loop: true }); } catch (_) {}
         this.audio.playClap();
         this.audio.playConfetti();
         if (country?.name) {
@@ -1952,7 +1966,33 @@ export default class Game {
         if (this.gameState === "START_SCREEN") return;
 
         if (this.gameState === "GRAND_CHAMPION") {
-            this._drawGrandChampionScreen(ctx);
+            // Same premium winner design as 40-min qualifier / round screens
+            const country = this._grandChampion;
+            if (country) {
+                const entry = this.winnerManager?._wins?.[country.code];
+                const wins = country.wins ?? entry?.wins ?? 0;
+                const winnerObj = {
+                    country: {
+                        code: country.code,
+                        name: country.name,
+                        image: country.image ?? entry?.imageSrc ?? null,
+                    },
+                    _isSegmentWinner: true,
+                    _segmentWins: wins,
+                };
+                const animT = Math.min(1, (Date.now() - (this._champDisplayStart || Date.now())) / 600);
+                this.winnerRender.draw(
+                    ctx, winnerObj,
+                    this._lw, this._lh,
+                    false,
+                    animT,
+                    this.layout.arenaX, this.layout.arenaY, this.layout.arenaRadius,
+                    true, 0,  // isFinalMode → shows 🏆 CHAMPION
+                    null
+                );
+            } else {
+                this._drawGrandChampionScreen(ctx);
+            }
             this.confetti.draw(ctx);
             return;
         }

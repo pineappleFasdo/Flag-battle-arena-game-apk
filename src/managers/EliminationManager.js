@@ -28,9 +28,13 @@ export default class EliminationManager {
         // Live threshold: max(original outer, current radius + buffer)
         // so shrinking doesn't trap flags outside the moving wall, and
         // classic mode still needs a real exit past the original rim.
+        // Past orange rim so flags that clear both gaps count as eliminated
+        const rimExtra = this.arena.rimEnabled
+            ? (this.arena.rimRadius - this.arena.radius) + (this.arena.rimThickness || 10) + 8
+            : 28;
         const liveBoundary = Math.max(
             this._outerBoundary,
-            this.arena.radius + 28
+            this.arena.radius + rimExtra
         );
 
         for (const flag of flagManager.flags) {

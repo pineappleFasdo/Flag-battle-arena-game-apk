@@ -1,63 +1,62 @@
 import Matter from "matter-js";
 
 /**
- * ORBIT DRAIN — competitor-style physics (FlagsBattleOfficial feel):
- * dense rim orbit, continuous swirl, steady mass exit through a medium gap.
- * Flags pack against the wall, stream toward the rotating gap, and drain out.
+ * ORBIT DRAIN
+ * Flags orbit the wall slowly and exit through the gap naturally.
+ * No aggressive ejection — flags leave only when they organically
+ * drift into the gap opening. Drain rate is slow and readable.
  */
 export default class OrbitDrainEvent {
     name  = "ORBIT DRAIN";
     color = "#4FC3F7";
     icon  = "🌀";
 
-    _origRotation   = 0.024;
-    _origInitialGap = 3;
-    _origMaxGap     = 3;
+    _origRotation   = 0.020;
+    _origInitialGap = 2;
+    _origMaxGap     = 5;
     _frame          = 0;
     _direction      = 1;
 
-    // Tuned to match video: visible gap + continuous stream exits
+    // Gap kept narrow — flags must naturally drift to the opening
     static GAP = 2;
 
     start({ arena, flagManager }) {
         if (arena) {
-            this._origRotation   = arena.rotationSpeed ?? 0.024;
-            this._origInitialGap = arena.initialGapSize ?? 3;
-            this._origMaxGap     = arena.maxGapSize ?? 3;
+            this._origRotation   = arena.rotationSpeed ?? 0.020;
+            this._origInitialGap = arena.initialGapSize ?? 2;
+            this._origMaxGap     = arena.maxGapSize ?? 5;
 
             const g = OrbitDrainEvent.GAP;
-            arena.rotationSpeed  = 0.014;
+            arena.rotationSpeed  = 0.012; // slow rotation — gap is easy to track
             arena.initialGapSize = g;
             arena.maxGapSize     = g;
-            if (arena.state === "PLAYING") {
-                arena.gapSize = g;
-            }
+            if (arena.state === "PLAYING") arena.gapSize = g;
         }
 
         this._direction = Math.random() < 0.5 ? 1 : -1;
-        this._frame = 0;
+        this._frame     = 0;
 
         const flags = flagManager?.flags ?? [];
-        const cx = arena?.cx ?? 0;
-        const cy = arena?.cy ?? 0;
+        const cx    = arena?.cx ?? 0;
+        const cy    = arena?.cy ?? 0;
 
         for (const flag of flags) {
             const b = flag.body;
             if (!b) continue;
             Matter.Sleeping.set(b, false);
 
-            const dx = b.position.x - cx;
-            const dy = b.position.y - cy;
+            const dx   = b.position.x - cx;
+            const dy   = b.position.y - cy;
             const dist = Math.hypot(dx, dy) || 1;
-            // Tangential kick → immediate orbit
-            const tx = -dy / dist;
-            const ty =  dx / dist;
-            const spd = 1.6 + Math.random() * 1.4;
+            const tx   = -dy / dist;
+            const ty   =  dx / dist;
+            // Gentle tangential nudge — let flags find their own orbit speed
+            const spd  = 0.8 + Math.random() * 0.6; // was 1.6–3.0
             Matter.Body.setVelocity(b, {
                 x: tx * this._direction * spd,
                 y: ty * this._direction * spd,
             });
-            Matter.Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.25);
+            Matter.Body.setAngularVelocity(b, (Math.random() - 0.5) * 0.12);
         }
     }
 
@@ -67,11 +66,11 @@ export default class OrbitDrainEvent {
         this._frame++;
         const g = OrbitDrainEvent.GAP;
 
-        arena.rotationSpeed = 0.014;
+        arena.rotationSpeed  = 0.012;
         if (arena.gapSize > 0) {
-            arena.gapSize = g;
+            arena.gapSize        = g;
             arena.initialGapSize = g;
-            arena.maxGapSize = g;
+            arena.maxGapSize     = g;
         }
 
         const flags = flagManager?.flags ?? [];
@@ -88,8 +87,8 @@ export default class OrbitDrainEvent {
         const gapCenter  = (gapCenterI / seg) * Math.PI * 2;
         const gapHalf    = (gapSize / seg) * Math.PI;
 
-        // Wide funnel so mass stream exits like the video
-        const funnelHalf = Math.max(gapHalf * 2.4, 0.20);
+        // Narrow funnel — only flags very close to gap opening get guided
+        const funnelHalf = Math.max(gapHalf * 1.4, 0.10);
 
         const offset = this._frame & 1;
 
@@ -108,49 +107,38 @@ export default class OrbitDrainEvent {
             const nx = dx / dist;
             const ny = dy / dist;
 
-            // Strong continuous swirl — rim orbit (core of competitor feel)
-            const swirl = 0.00022;
+            // Very light swirl — just enough to maintain loose orbit
+            const swirl = 0.00010; // was 0.00022
             Matter.Body.applyForce(body, body.position, {
                 x: tx * swirl * this._direction,
                 y: ty * swirl * this._direction,
             });
 
-            // Soft outward pressure → pack against wall
-            if (dist < R * 0.72) {
-                Matter.Body.applyForce(body, body.position, {
-                    x: nx * 0.00016,
-                    y: ny * 0.00016,
-                });
-            }
+            // No outward pressure — flags at centre stay there naturally
 
-            // Near-rim only: funnel toward gap
-            if (dist < R * 0.50) continue;
+            // Near-gap only: very gentle funnel (rim flags only)
+            if (dist < R * 0.60) continue;
 
             let diff = ang - gapCenter;
             diff = Math.atan2(Math.sin(diff), Math.cos(diff));
             if (Math.abs(diff) > funnelHalf) continue;
 
-            const closeness = 1 - Math.abs(diff) / funnelHalf;
-            const tangential = 0.00045 * closeness;
-            const dir = diff > 0 ? -1 : 1;
+            const closeness  = 1 - Math.abs(diff) / funnelHalf;
+            const tangential = 0.00008 * closeness; // was 0.00018 — barely a nudge
+            const dir        = diff > 0 ? -1 : 1;
 
             Matter.Body.applyForce(body, body.position, {
                 x: tx * tangential * dir,
                 y: ty * tangential * dir,
             });
 
-            // Eject through gap when aligned
-            if (Math.abs(diff) < gapHalf * 1.25 && dist > R * 0.68) {
-                Matter.Body.applyForce(body, body.position, {
-                    x: nx * 0.0010,
-                    y: ny * 0.0010,
-                });
-            }
+            // No active eject burst — flags exit only by natural momentum
+            // through the gap, same as all other events.
 
-            // Speed cap — keep motion readable, not chaotic
+            // Speed brake — slow flags down at the wall so they don't tunnel
             const spd = Math.hypot(body.velocity.x, body.velocity.y);
-            if (spd > 6.0) {
-                const s = 6.0 / spd;
+            if (spd > 3.0) { // was 6.0 — much lower ceiling
+                const s = 3.0 / spd;
                 Matter.Body.setVelocity(body, {
                     x: body.velocity.x * s,
                     y: body.velocity.y * s,

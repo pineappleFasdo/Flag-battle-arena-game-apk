@@ -12,9 +12,9 @@ export default class ReverseGravityEvent {
     icon  = "🙃";
 
     _frame = 0;
-    _EASE_IN  = 60;   // frames to ramp gravity from 0 → -peak
+    _EASE_IN  = 90;   // frames to ramp gravity from 0 → -peak (was 60 — slower build-up)
     _EASE_OUT = 60;   // frames at end to ramp back to 0
-    _PEAK     = -0.35;
+    _PEAK     = -0.12; // was -0.35 — gentler float, flags spread instead of slamming top
 
     start({ physics }) {
         this._frame = 0;

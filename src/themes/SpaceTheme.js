@@ -291,7 +291,7 @@ export default class SpaceTheme {
         const baseAngle = Math.atan2(arenaY-y, arenaX-x);
         const angle     = baseAngle + (Math.random()-0.5)*0.70;
 
-        const speed = 7 + Math.random()*5;   // fast — crosses screen in ~1-1.5 s
+        const speed = 6 + Math.random()*4; // slower — crosses screen in ~3-4 s
         const vx = Math.cos(angle)*speed;
         const vy = Math.sin(angle)*speed;
 
@@ -334,8 +334,8 @@ export default class SpaceTheme {
             ? (4 + Math.floor(Math.random()*3))   // 4-6 on mobile
             : (6 + Math.floor(Math.random()*5));   // 6-10 on desktop
         this._showerBatchLeft     = count;
-        // Spread over 3 s (was 4 s) so the shower feels intense and focused
-        this._showerBatchInterval = Math.max(1, Math.floor((3*60)/count));
+        // Spread over ~5 s so rocks drift in more slowly
+        this._showerBatchInterval = Math.max(1, Math.floor((4*60)/count));
         this._warningLife         = this._WARNING_DUR;
 
         // 🔊 Swoosh — deep space whoosh as the shower begins

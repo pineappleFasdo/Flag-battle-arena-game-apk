@@ -35,7 +35,7 @@ export default class DoubleHoleEvent {
         const gapCenterIndex  = secondGapStart + arena.gapSize / 2;
         const secondGapAngle  = (gapCenterIndex / seg) * Math.PI * 2;
         const gapHalfAngle    = (arena.gapSize / seg) * Math.PI;
-        const funnelHalfAngle = gapHalfAngle * 3.5;
+        const funnelHalfAngle = gapHalfAngle * 2.0; // was 3.5 — narrower funnel cone
 
         const cx = arena.cx;
         const cy = arena.cy;
@@ -68,15 +68,15 @@ export default class DoubleHoleEvent {
             const dir = diff > 0 ? -1 : 1;
 
             Matter.Body.applyForce(body, body.position, {
-                x: tx * 0.0006 * closeness * dir * forceScale,
-                y: ty * 0.0006 * closeness * dir * forceScale,
+                x: tx * 0.0002 * closeness * dir * forceScale, // was 0.0006
+                y: ty * 0.0002 * closeness * dir * forceScale,
             });
 
             // Radial eject once inside the gap window
             if (Math.abs(diff) < gapHalfAngle && dist > arena.radius * 0.75) {
                 Matter.Body.applyForce(body, body.position, {
-                    x: (dx / dist) * 0.003 * forceScale,
-                    y: (dy / dist) * 0.003 * forceScale,
+                    x: (dx / dist) * 0.0008 * forceScale, // was 0.003
+                    y: (dy / dist) * 0.0008 * forceScale,
                 });
                 Matter.Body.setAngularVelocity(
                     body,

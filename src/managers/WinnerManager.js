@@ -28,9 +28,9 @@ export default class WinnerManager {
         // Stalemate: few flags barely moving for a short period → force tie
         // so a mutual jam never freezes the round indefinitely.
         this._stalemateSince    = 0;
-        this._STALEMATE_MS      = 1500;  // 1.5s of stillness → faster rounds
-        this._STALEMATE_MAX_SPD = 0.70;  // flags slower than this → stalemate (easier trigger)
-        this._STALEMATE_MAX_N   = 15;    // trigger with more flags stuck for faster rounds
+        this._STALEMATE_MS      = 6000;  // 6s of stillness before forced tie (was 1.5s)
+        this._STALEMATE_MAX_SPD = 0.40;  // flags must be nearly motionless to count (was 0.70)
+        this._STALEMATE_MAX_N   = 6;     // only trigger when <=6 flags remain (was 15)
     }
 
     // ── Persistence ───────────────────────────────────────────────────────────

@@ -246,6 +246,22 @@ export default class AudioManager {
         this._noise(chordStart, 0.60, 0.12, 8000);
     }
 
+    /** Replay winner fanfare on a loop until stopWinnerLoop(). */
+    startWinnerLoop(intervalMs = 2800) {
+        this.stopWinnerLoop();
+        this.playWinner();
+        this._winnerLoopId = setInterval(() => {
+            try { this.playWinner(); } catch (_) {}
+        }, intervalMs);
+    }
+
+    stopWinnerLoop() {
+        if (this._winnerLoopId) {
+            clearInterval(this._winnerLoopId);
+            this._winnerLoopId = null;
+        }
+    }
+
     /** Soft crowd clap burst for champion celebration. */
     playClap() {
         const ctx = this._resume();

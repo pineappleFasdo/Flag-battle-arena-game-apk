@@ -16,7 +16,7 @@ export const BGM = {
     // Champion / winner screen
     champion: {
         file:   'there-it-is.mp3',
-        volume: 0.22,
+        volume: 0.12,  // light background on winner screens
     },
 };
 
