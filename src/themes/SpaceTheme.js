@@ -545,63 +545,93 @@ export default class SpaceTheme {
             if (imp.ring){ if (imp.life<=0) this._impacts.splice(i,1); continue; }
             for (const p of imp.sparks){
                 p.x+=p.vx; p.y+=p.vy;
-                p.vx*=0.87; p.vy*=0.87;
-                p.a*=0.87;
+                p.vy+=0.04; // slight gravity
+                p.vx*=0.89; p.vy*=0.89;
+                p.a*=0.91;
+                p.r*=0.97;
             }
             if (imp.life<=0) this._impacts.splice(i,1);
         }
     }
 
-    // ── Burn effect — fire & ember particles at flag position ───────────────
+    // ── Burn effect — dramatic flag explosion: orange fireball + debris ──────
     _spawnBurnEffect(x, y) {
-        const colours = ['255,90,10', '255,160,20', '255,220,80', '220,50,0', '255,40,0'];
-        const count   = 28 + Math.floor(Math.random() * 12);
+        // Pure orange palette: white-orange core → vivid orange → deep red-orange
+        const colours = [
+            '255,240,160', '255,200,60', '255,160,20',
+            '255,110,5',   '230,70,0',   '200,40,0',
+        ];
+        const count   = 45 + Math.floor(Math.random() * 20);
         const particles = [];
         for (let i = 0; i < count; i++) {
             const ang = Math.random() * Math.PI * 2;
-            const spd = 1.2 + Math.random() * 4.5;
+            const spd = 1.5 + Math.random() * 7.0;
+            // Choose color biased toward bright orange
+            const ci = Math.floor(Math.random() * colours.length);
             particles.push({
                 x, y,
                 vx: Math.cos(ang) * spd,
-                // bias upward so flames rise
-                vy: Math.sin(ang) * spd - 1.8 - Math.random() * 2.0,
+                // bias upward so flames rise naturally
+                vy: Math.sin(ang) * spd - 2.5 - Math.random() * 3.5,
                 a : 1.0,
-                r : 2.5 + Math.random() * 4.5,
-                color: colours[Math.floor(Math.random() * colours.length)],
+                r : 3.5 + Math.random() * 6.0,
+                color: colours[ci],
             });
         }
-        this._burnEffects.push({ x, y, particles, life: 100, maxLife: 100 });
+        // Extra large core flash particles
+        for (let i = 0; i < 8; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            particles.push({
+                x, y,
+                vx: Math.cos(ang) * (0.5 + Math.random() * 2.0),
+                vy: Math.sin(ang) * (0.5 + Math.random() * 2.0) - 1.0,
+                a : 1.0,
+                r : 9 + Math.random() * 7,
+                color: '255,220,100',
+            });
+        }
+        this._burnEffects.push({ x, y, particles, life: 130, maxLife: 130 });
     }
 
     _spawnImpact(x, y) {
-        const colours = ['255,200,80','255,130,20','255,255,160','255,80,0'];
-        const count   = 14+Math.floor(Math.random()*10);
+        // Pure orange/amber sparks radiating from impact
+        const colours = ['255,210,60','255,150,20','255,240,180','255,90,5','230,60,0'];
+        // Primary large sparks
+        const count   = 22 + Math.floor(Math.random() * 12);
         const sparks  = [];
         for (let i=0;i<count;i++){
             const ang = Math.random()*Math.PI*2;
-            const spd = 2.5+Math.random()*5.5;
+            const spd = 3.5 + Math.random() * 8.5;
             sparks.push({
-                x,y,
-                vx:Math.cos(ang)*spd, vy:Math.sin(ang)*spd,
-                a:1.0,
-                color:colours[Math.floor(Math.random()*colours.length)],
-                r:1.2+Math.random()*3.0,
+                x, y,
+                vx: Math.cos(ang)*spd,
+                vy: Math.sin(ang)*spd,
+                a:  1.0,
+                color: colours[Math.floor(Math.random()*colours.length)],
+                r:  1.8 + Math.random() * 4.5,
             });
         }
-        this._impacts.push({ sparks, life:50 });
-        this._impacts.push({ ring:{x,y,maxR:40}, life:18 });
+        this._impacts.push({ sparks, life: 70 });
+        // Expanding shock ring — double ring for drama
+        this._impacts.push({ ring:{x, y, maxR:55, color:'255,150,20'}, life:22 });
+        this._impacts.push({ ring:{x, y, maxR:30, color:'255,230,80'}, life:14 });
     }
 
-    // ── Draw ──────────────────────────────────────────────────────────────────
+    // ── Draw (background only — stars, nebula, planets) ──────────────────────
+    // Call this BEFORE flags. Then call drawForeground() AFTER flags
+    // so asteroids always render in front of flags.
     draw(ctx, lw, lh) {
         if (!this._built) return;
-        // Far background layers first — all stay soft so arena/flags dominate
         this._drawSpaceGradient(ctx, lw, lh);
         this._drawNebula(ctx);
         this._drawPlanets(ctx);
         this._drawStars(ctx);
         this._drawShooters(ctx);
-        // Gameplay overlays (asteroids / impacts / burns)
+    }
+
+    // ── Foreground draw (asteroids over flags) ────────────────────────────────
+    drawForeground(ctx) {
+        if (!this._built) return;
         this._drawAsteroids(ctx);
         this._drawImpacts(ctx);
         this._drawBurnEffects(ctx);
@@ -811,7 +841,7 @@ export default class SpaceTheme {
     _drawAsteroids(ctx) {
         ctx.save();
         for (const a of this._asteroids) {
-            // Fire trail — always orange/red since these are lethal rocks
+            // Fire trail — vivid orange/amber, fully orange-themed
             if (a.trail.length>=2) {
                 ctx.save();
                 const tLen=a.trail.length;
@@ -819,14 +849,21 @@ export default class SpaceTheme {
                     const t=i/tLen;
                     const p0=a.trail[i-1], p1=a.trail[i];
                     ctx.beginPath(); ctx.moveTo(p0.x,p0.y); ctx.lineTo(p1.x,p1.y);
-                    // Inner core: bright yellow-white; outer: deep orange
-                    ctx.strokeStyle=t>0.6
-                        ? `rgba(255,220,80,${t*0.75})`
-                        : `rgba(255,100,10,${t*0.50})`;
-                    ctx.lineWidth=a.size*0.30*t;
+                    // Pure orange trail: bright orange-white core fading to deep orange-red
+                    if (t > 0.75) {
+                        ctx.strokeStyle=`rgba(255,200,50,${t*0.90})`;  // bright orange-amber at tip
+                    } else if (t > 0.45) {
+                        ctx.strokeStyle=`rgba(255,130,10,${t*0.82})`;  // vivid orange mid
+                    } else {
+                        ctx.strokeStyle=`rgba(220,60,0,${t*0.65})`;    // deep orange-red tail
+                    }
+                    ctx.lineWidth=a.size*0.38*t;
                     ctx.lineCap='round';
+                    ctx.shadowColor='rgba(255,120,0,0.55)';
+                    ctx.shadowBlur=a.size*0.25*t;
                     ctx.stroke();
                 }
+                ctx.shadowBlur=0;
                 ctx.restore();
             }
 
@@ -839,20 +876,32 @@ export default class SpaceTheme {
             for (let i=1;i<a.pts.length;i++) ctx.lineTo(a.pts[i].x,a.pts[i].y);
             ctx.closePath();
 
-            // Glowing hot rock
+            // Glowing hot rock — vivid orange lava-core
             const grad=ctx.createRadialGradient(-a.size*0.2,-a.size*0.15,0,0,0,a.size);
-            grad.addColorStop(0,  'rgba(255,230,160,0.98)');
-            grad.addColorStop(0.3,'rgba(180,100,30,0.95)');
-            grad.addColorStop(0.7,'rgba(90,50,20,0.92)');
-            grad.addColorStop(1,  'rgba(30,15,5,0.88)');
+            grad.addColorStop(0,  'rgba(255,240,180,1.00)');  // white-orange hot core
+            grad.addColorStop(0.2,'rgba(255,180,40,0.98)');   // bright orange
+            grad.addColorStop(0.5,'rgba(220,80,5,0.95)');     // vivid orange-red
+            grad.addColorStop(0.8,'rgba(100,30,5,0.92)');     // dark orange-brown
+            grad.addColorStop(1,  'rgba(30,10,2,0.88)');
             ctx.fillStyle=grad; ctx.fill();
 
-            // Glowing rim
-            ctx.shadowColor='rgba(255,140,20,0.9)';
-            ctx.shadowBlur=a.size*0.6;
-            ctx.strokeStyle='rgba(255,180,50,0.80)';
-            ctx.lineWidth=1.2; ctx.stroke();
+            // Outer orange glow halo
+            ctx.shadowColor='rgba(255,120,0,1.0)';
+            ctx.shadowBlur=a.size*1.1;
+            ctx.strokeStyle='rgba(255,160,20,0.92)';
+            ctx.lineWidth=1.8; ctx.stroke();
             ctx.shadowBlur=0;
+
+            // Inner highlight streak
+            ctx.save();
+            ctx.globalAlpha=0.55;
+            ctx.strokeStyle='rgba(255,230,120,0.80)';
+            ctx.lineWidth=1.0;
+            ctx.beginPath();
+            ctx.moveTo(-a.size*0.35,-a.size*0.18);
+            ctx.quadraticCurveTo(-a.size*0.1,-a.size*0.10,a.size*0.15,-a.size*0.05);
+            ctx.stroke();
+            ctx.restore();
 
             // Craters
             const cr=a.size*0.12;
@@ -873,8 +922,8 @@ export default class SpaceTheme {
             for (const p of b.particles) {
                 if (p.r < 0.3 || p.a < 0.02) continue;
                 ctx.globalAlpha = Math.max(0, Math.min(1, p.a));
-                ctx.shadowColor = `rgba(${p.color},0.85)`;
-                ctx.shadowBlur  = 7;
+                ctx.shadowColor = `rgba(${p.color},0.90)`;
+                ctx.shadowBlur  = p.r > 6 ? 14 : 8;
                 ctx.fillStyle   = `rgba(${p.color},1)`;
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, Math.max(0.3, p.r), 0, Math.PI * 2);
@@ -890,25 +939,29 @@ export default class SpaceTheme {
         ctx.save();
         for (const imp of this._impacts) {
             if (imp.ring) {
-                const p=1-imp.life/18;
-                const rr=4+p*imp.ring.maxR;
-                const ra=(1-p)*0.80;
-                ctx.globalAlpha=Math.max(0,ra);
-                ctx.strokeStyle='rgba(255,180,40,1)';
-                ctx.lineWidth=3.5*(1-p)+0.5;
-                ctx.shadowBlur=12; ctx.shadowColor='#FF7700';
-                ctx.beginPath(); ctx.arc(imp.ring.x,imp.ring.y,rr,0,Math.PI*2); ctx.stroke();
-                ctx.shadowBlur=0;
+                const maxLife = imp.ring.maxR === 55 ? 22 : 14;
+                const p = 1 - imp.life / maxLife;
+                const rr = 4 + p * imp.ring.maxR;
+                const ra = (1 - p) * 0.90;
+                const col = imp.ring.color || '255,180,40';
+                ctx.globalAlpha = Math.max(0, ra);
+                ctx.strokeStyle = `rgba(${col},1)`;
+                ctx.lineWidth = (3.5 * (1 - p) + 0.5);
+                ctx.shadowBlur = 18; ctx.shadowColor = `rgba(${col},0.85)`;
+                ctx.beginPath(); ctx.arc(imp.ring.x, imp.ring.y, rr, 0, Math.PI*2); ctx.stroke();
+                ctx.shadowBlur = 0;
                 continue;
             }
+            const lifeRatio = imp.life / 70;
             for (const p of imp.sparks) {
-                ctx.globalAlpha=Math.max(0,p.a);
-                ctx.fillStyle=`rgba(${p.color},1)`;
-                ctx.shadowBlur=6; ctx.shadowColor=`rgba(${p.color},0.9)`;
-                ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+                if (p.a < 0.02 || p.r < 0.3) continue;
+                ctx.globalAlpha = Math.max(0, p.a);
+                ctx.fillStyle = `rgba(${p.color},1)`;
+                ctx.shadowBlur = 8; ctx.shadowColor = `rgba(${p.color},0.85)`;
+                ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.3, p.r), 0, Math.PI*2); ctx.fill();
             }
         }
-        ctx.globalAlpha=1; ctx.shadowBlur=0; ctx.restore();
+        ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.restore();
     }
 }
 

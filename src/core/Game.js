@@ -1762,6 +1762,11 @@ export default class Game {
             this._drawLongBattleSegmentStrip(ctx);
         }
 
+        // Long Battle: scrolling news ticker (below segment strip, only in 5H mode)
+        if (this.isLongBattleMode && !this.sessionMode?.inGrandFinal) {
+            this._drawLongBattleNewsTicker(ctx);
+        }
+
         // Asteroid eliminations strip — just below the leaderboard
         if (this.theme?.stars && this._asteroidElimMsg) {
             this._drawAsteroidElimStrip(ctx);
@@ -1770,6 +1775,11 @@ export default class Game {
         this.arenaRenderer.draw(ctx, this.arena, this.theme);
         this.flagManager.draw(ctx);
         this.trayLauncher.draw(ctx);
+
+        // ── Asteroid foreground: drawn AFTER flags so rocks appear IN FRONT ──
+        if (this.theme?.stars && this.gameState !== "START_SCREEN") {
+            this.spaceTheme.drawForeground(ctx);
+        }
 
         if (this.gameState === "PLAYING") {
             // Final mode: use finalist totals so the bar never goes negative
@@ -2080,6 +2090,193 @@ export default class Game {
         ctx.restore();
     }
 
+
+    // ── 5H Championship news ticker ───────────────────────────────────────────
+    // Scrolling bottom-tray style text explaining the 5H Championship rules.
+    // Appears below the segment-winner strip; uses random delays so it doesn't
+    // fight with the round-winner flash. Readable pace left → right.
+    _drawLongBattleNewsTicker(ctx) {
+        const mode = this.sessionMode;
+        if (!mode) return;
+        const now = performance.now();
+
+        // ── State init ────────────────────────────────────────────────────────
+        if (!this._lbTicker) {
+            this._lbTicker = {
+                x           : null,    // null = not yet started
+                speed       : 1.20,    // px/frame — readable at 60fps
+                nextShowAt  : now + 20000 + Math.random() * 30000,  // first appearance: 20-50s in
+                active      : false,
+                textWidth   : 0,
+                alpha       : 0,
+                fadeState   : 'in',    // 'in' | 'scroll' | 'out' | 'wait'
+                fadeT       : 0,
+            };
+        }
+        const tk = this._lbTicker;
+
+        // ── Timing: only show during random windows, not continuously ─────────
+        if (!tk.active) {
+            if (now < tk.nextShowAt) return;
+            // Don't show if round winner flash is visible (respect segment strip)
+            const flashActive = this._lbSegmentFlashQueue?.length > 0;
+            if (flashActive) {
+                // Defer by 8-12s to avoid overlap
+                tk.nextShowAt = now + 8000 + Math.random() * 4000;
+                return;
+            }
+            tk.active    = true;
+            tk.fadeState = 'in';
+            tk.fadeT     = 0;
+            tk.alpha     = 0;
+        }
+
+        // ── Layout ────────────────────────────────────────────────────────────
+        const lbBottom = this.layout.lbY + this.layout.lbZoneH;
+        // Segment strip height (same sizing as _drawLongBattleSegmentStrip)
+        const segStripH = Math.max(24, Math.round(this.layout.lbRowH * 1.05));
+        const segStripY = lbBottom + 3;
+        // Ticker sits below the segment strip with a small gap
+        const tickerH = Math.max(20, Math.round(this.layout.lbRowH * 0.88));
+        const tickerY = segStripY + segStripH + 4;
+        const lbX     = this.layout.lbX;
+        const lbW     = this.layout.lbW;
+
+        // ── Build message strings — rotate through content ────────────────────
+        if (!this._lbTickerMsgIndex) this._lbTickerMsgIndex = 0;
+        const seg     = mode.segmentIndex || 0;
+        const maxSeg  = 8;  // always 8 rounds
+        const rem     = mode.remainingSegmentMs ? mode.remainingSegmentMs() : 0;
+        const rm = Math.floor(rem / 60000);
+        const rs = Math.floor((rem % 60000) / 1000);
+        const remStr  = rm > 0 ? `${rm}m ${rs.toString().padStart(2,'0')}s` : `${rs}s`;
+        const winners = (mode.segmentWinners || []);
+        const wNames  = winners.map(w => w.name).filter(Boolean).slice(-3).join('  ·  ');
+        const MSGS = [
+            `  🔴 LIVE  ·  5H CHAMPIONSHIP  ·  Each 40-minute round crowns a ROUND WINNER  ·  After 8 rounds, the winners clash in the GRAND FINAL  ·  Only ONE can be the Ultimate Champion  ·  `,
+            `  🏆 HOW IT WORKS  ·  ROUND ${seg + 1} of 8  ·  Highest wins in 40 min advances to the Grand Final  ·  ${remStr} left in this round  ·  Round winners fight last — who survives?  ·  `,
+            `  ⚡ 5-HOUR CHAMPIONSHIP  ·  8 rounds × 40 minutes = The longest battle in Flag Arena history  ·  Each round winner earns their spot in the Grand Final elimination  ·  `,
+            wNames
+                ? `  🎖 ROUND WINNERS SO FAR  ·  ${wNames}  ·  They will face each other in the GRAND FINAL  ·  Can they hold on to win it all?  ·  `
+                : `  🎖 CHAMPIONSHIP IN PROGRESS  ·  Round ${seg + 1} of 8  ·  The highest-wins country after 40 minutes qualifies for the Grand Final  ·  Stay tuned!  ·  `,
+            `  📺 GRAND FINAL RULES  ·  All 8 round winners enter Last Flag Standing elimination  ·  One by one they fall until only ONE FLAG REMAINS  ·  That flag is the 5H CHAMPION  ·  `,
+        ];
+
+        const msgCount = MSGS.length;
+        const msgIdx   = this._lbTickerMsgIndex % msgCount;
+        const text     = MSGS[msgIdx];
+
+        // ── Measure text ──────────────────────────────────────────────────────
+        const fs = Math.max(9, Math.round(tickerH * 0.52));
+        ctx.save();
+        ctx.font = `700 ${fs}px 'Orbitron', system-ui, sans-serif`;
+        const fullW = ctx.measureText(text).width;
+
+        // ── Initialize scroll x ───────────────────────────────────────────────
+        if (tk.x === null || tk.textWidth !== fullW) {
+            tk.x = lbX + lbW;     // start just off the right edge
+            tk.textWidth = fullW;
+        }
+
+        // ── Fade in ───────────────────────────────────────────────────────────
+        if (tk.fadeState === 'in') {
+            tk.fadeT = Math.min(1, tk.fadeT + 0.04);
+            tk.alpha = tk.fadeT;
+            if (tk.fadeT >= 1) tk.fadeState = 'scroll';
+        }
+
+        // ── Scroll ────────────────────────────────────────────────────────────
+        if (tk.fadeState === 'scroll') {
+            tk.x -= tk.speed;
+            tk.alpha = 1;
+            // When text fully scrolled off the left edge, fade out
+            if (tk.x + fullW < lbX - 20) {
+                tk.fadeState = 'out';
+                tk.fadeT = 1;
+                this._lbTickerMsgIndex = (this._lbTickerMsgIndex || 0) + 1;
+            }
+        }
+
+        // ── Fade out ──────────────────────────────────────────────────────────
+        if (tk.fadeState === 'out') {
+            tk.fadeT = Math.max(0, tk.fadeT - 0.04);
+            tk.alpha = tk.fadeT;
+            if (tk.fadeT <= 0) {
+                // Done — schedule next appearance after a random gap
+                tk.active      = false;
+                tk.x           = null;
+                tk.nextShowAt  = now + 15000 + Math.random() * 40000;
+                ctx.restore();
+                return;
+            }
+        }
+
+        // ── Draw ticker panel ─────────────────────────────────────────────────
+        ctx.globalAlpha = Math.max(0, Math.min(1, tk.alpha));
+
+        // Dark navy panel matching leaderboard design language
+        const panelGrad = ctx.createLinearGradient(lbX, tickerY, lbX + lbW, tickerY + tickerH);
+        panelGrad.addColorStop(0, 'rgba(10, 16, 38, 0.95)');
+        panelGrad.addColorStop(1, 'rgba(16, 24, 54, 0.95)');
+        ctx.fillStyle = panelGrad;
+        if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath(); ctx.roundRect(lbX, tickerY, lbW, tickerH, 5); ctx.fill();
+        } else {
+            ctx.fillRect(lbX, tickerY, lbW, tickerH);
+        }
+
+        // Orange accent border for 5H Championship (matches event color)
+        ctx.strokeStyle = 'rgba(255, 107, 53, 0.70)';
+        ctx.lineWidth = 1.2;
+        if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath(); ctx.roundRect(lbX, tickerY, lbW, tickerH, 5); ctx.stroke();
+        } else {
+            ctx.strokeRect(lbX, tickerY, lbW, tickerH);
+        }
+
+        // Left label badge: "5H" in orange
+        const badgeW = Math.round(tickerH * 2.4);
+        const badgeGrad = ctx.createLinearGradient(lbX, tickerY, lbX, tickerY + tickerH);
+        badgeGrad.addColorStop(0, 'rgba(255, 107, 53, 0.90)');
+        badgeGrad.addColorStop(1, 'rgba(200, 60, 20, 0.90)');
+        ctx.fillStyle = badgeGrad;
+        if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath(); ctx.roundRect(lbX, tickerY, badgeW, tickerH, [5, 0, 0, 5]); ctx.fill();
+        } else {
+            ctx.fillRect(lbX, tickerY, badgeW, tickerH);
+        }
+        const badgeFontSize = Math.max(8, Math.round(tickerH * 0.50));
+        ctx.font = `800 ${badgeFontSize}px 'Orbitron', system-ui, sans-serif`;
+        ctx.fillStyle    = '#FFFFFF';
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor  = 'rgba(0,0,0,0.6)';
+        ctx.shadowBlur   = 4;
+        ctx.fillText('5H', lbX + badgeW / 2, tickerY + tickerH / 2);
+        ctx.shadowBlur   = 0;
+
+        // Clip scrolling text to panel width (exclude badge)
+        const textZoneX = lbX + badgeW + 4;
+        const textZoneW = lbW - badgeW - 6;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(textZoneX, tickerY, textZoneW, tickerH);
+        ctx.clip();
+
+        // Scrolling text
+        ctx.font = `700 ${fs}px 'Orbitron', system-ui, sans-serif`;
+        ctx.fillStyle    = '#E0D0FF';
+        ctx.textAlign    = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor  = 'rgba(255, 107, 53, 0.35)';
+        ctx.shadowBlur   = 5;
+        ctx.fillText(text, tk.x, tickerY + tickerH / 2);
+        ctx.shadowBlur   = 0;
+
+        ctx.restore(); // pop clip
+        ctx.restore(); // pop globalAlpha
+    }
+
     _drawCentralOverlay(ctx) {
         if (this.gameState === "START_SCREEN") return;
 
@@ -2231,13 +2428,13 @@ export default class Game {
         const titleSize = Math.min(this._lw * 0.028, 22);
         ctx.font = gf(800, titleSize);
         ctx.fillStyle = "#38D5FF";
-        ctx.fillText(this.isFinalMode ? "LAST FLAG STANDING" : "NEXT BATTLE", cx, cy - cardH * 0.28);
+        ctx.fillText(this.isFinalMode ? "ELIMINATION" : "NEXT BATTLE", cx, cy - cardH * 0.28);
 
         const pulse    = 1 + 0.04 * Math.sin(timer * 0.1);
         const iconSize = Math.min(this._lw * 0.08, 52) * pulse;
         ctx.font       = `${iconSize}px system-ui, Apple Color Emoji, sans-serif`;
         ctx.shadowBlur = 14;
-        ctx.fillText(this.isFinalMode ? "🏳️" : ev.icon, cx, cy - 4);
+        ctx.fillText(this.isFinalMode ? "🌋" : ev.icon, cx, cy - 4);
 
         // Event name badge strip
         const eventSize = Math.min(this._lw * 0.048, 36);
@@ -2246,7 +2443,7 @@ export default class Game {
         ctx.shadowColor = "rgba(61, 124, 255, 0.35)";
         ctx.shadowBlur  = 12;
         ctx.fillText(
-            this.isFinalMode ? `LAST STANDING  ·  ${this._finalists.length} FLAGS` : ev.name,
+            this.isFinalMode ? `EARTHQUAKE  ·  ${this._finalists.length} FLAGS` : ev.name,
             cx, cy + cardH * 0.28
         );
         ctx.restore();
@@ -2296,7 +2493,7 @@ export default class Game {
         ctx.shadowBlur  = 0;
         ctx.fillText(
             this.isFinalMode
-                ? `🏳️  LAST STANDING  ·  ${this._finalists.length} FLAGS`
+                ? `🌋  EARTHQUAKE  ·  ${this._finalists.length} FLAGS`
                 : `${ev.icon}  ${ev.name}`,
             cx, badgeY + badgeH / 2
         );
@@ -2309,7 +2506,7 @@ export default class Game {
         ctx.shadowBlur  = 6;
         ctx.fillText(
             this.isFinalMode
-                ? "LAST FLAG STANDING"
+                ? "ELIMINATION ROUND"
                 : this.isLongBattleMode
                     ? "5H CHAMPIONSHIP"
                 : this.isHighestWinsMode
@@ -2529,7 +2726,7 @@ export default class Game {
         const titleSize = Math.min(R * 0.11, 24);
         ctx.font = gf(900, titleSize);
         ctx.fillStyle = "#F4F7FF";
-        ctx.fillText("LAST FLAG STANDING", cx, cy - titleSize * 0.35);
+        ctx.fillText("EARTHQUAKE", cx, cy - titleSize * 0.35);
 
         const subSize = Math.min(R * 0.075, 16);
         ctx.font = gf(700, subSize);

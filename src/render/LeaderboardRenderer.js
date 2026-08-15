@@ -183,7 +183,7 @@ export default class LeaderboardRenderer {
         // Header icon + label
         const hFontSize = Math.max(8, Math.round(headerH * 0.44));
         const label = this._isFinalMode
-            ? '⚔️  LAST FLAG STANDING'
+            ? '🌋  EARTHQUAKE'
             : this._isLongBattleMode
                 ? '⏱️  5H ROUND STANDINGS'
             : this._isHighestWinsMode
