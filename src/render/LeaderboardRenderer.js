@@ -7,6 +7,7 @@ export default class LeaderboardRenderer {
 
     constructor() {
         this._isFinalMode       = false;
+        this._isGrandFinal      = false;
         this._isHighestWinsMode = false;
         this._isLongBattleMode  = false;
         this._allRows      = [];
@@ -44,6 +45,10 @@ export default class LeaderboardRenderer {
 
     setFinalMode(enabled) {
         this._isFinalMode = !!enabled;
+    }
+
+    setGrandFinal(enabled) {
+        this._isGrandFinal = !!enabled;
     }
 
     setHighestWinsMode(enabled) {
@@ -182,8 +187,10 @@ export default class LeaderboardRenderer {
 
         // Header icon + label
         const hFontSize = Math.max(8, Math.round(headerH * 0.44));
-        const label = this._isFinalMode
-            ? '🌋  EARTHQUAKE'
+        const label = this._isGrandFinal
+            ? '⚔️  5H ROUND WINNERS ELIMINATION'
+            : this._isFinalMode
+            ? '⚔️  ELIMINATION ROUND'
             : this._isLongBattleMode
                 ? '⏱️  5H ROUND STANDINGS'
             : this._isHighestWinsMode

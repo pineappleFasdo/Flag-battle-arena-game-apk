@@ -255,6 +255,23 @@ export default class AudioManager {
         }, intervalMs);
     }
 
+    /**
+     * 5H segment winner celebration:
+     * - Plays the tada fanfare ONCE at the start.
+     * - Then loops the lighter confetti/sparkle sound continuously
+     *   until stopWinnerLoop() is called.
+     * @param {number} celebrationIntervalMs  How often the light sound repeats (ms).
+     */
+    startCelebrationLoop(celebrationIntervalMs = 1800) {
+        this.stopWinnerLoop();
+        // One-shot tada to open the celebration
+        try { this.playWinner(); } catch (_) {}
+        // Then loop the lighter sparkle sound
+        this._winnerLoopId = setInterval(() => {
+            try { this.playConfetti(); } catch (_) {}
+        }, celebrationIntervalMs);
+    }
+
     stopWinnerLoop() {
         if (this._winnerLoopId) {
             clearInterval(this._winnerLoopId);

@@ -151,10 +151,13 @@ export default class LongBattleMode {
         }
 
         if (winnerEntry) {
+            const img = this.game.flagLoader
+                ? this.game.flagLoader.load(winnerEntry.code)
+                : winnerEntry.image;
             const rec = {
                 code: winnerEntry.code,
                 name: winnerEntry.name,
-                image: winnerEntry.image,
+                image: img,
                 wins: winnerEntry.wins,
                 segment: this.segmentIndex + 1,
             };
@@ -215,7 +218,23 @@ export default class LongBattleMode {
     }
 
     debugExpireSegment() {
-        this.segmentStartTime = Date.now() - LongBattleMode.SEGMENT_MS - 1000;
+        // Must account for _segmentPauseOffsetMs: isSegmentTimeUp() subtracts it from
+        // elapsed, so we need to push segmentStartTime far enough back that even after
+        // that subtraction the result is >= SEGMENT_MS.
+        this.segmentStartTime = Date.now()
+            - LongBattleMode.SEGMENT_MS
+            - (this._segmentPauseOffsetMs ?? 0)
+            - 1000;
+    }
+
+    /**
+     * Called by Shift+N (main.js) when the WINNER_SHOW is skipped early and the
+     * next segment begins immediately.  Anchors segmentStartTime to RIGHT NOW
+     * and clears the pause offset so the 40-min clock counts from this moment.
+     */
+    onSegmentActuallyStarted() {
+        this.segmentStartTime      = Date.now();
+        this._segmentPauseOffsetMs = 0;
     }
 
     debugForceCloseSegment() {

@@ -136,6 +136,10 @@ export default class WinnerRender {
         if (isFinalMode) {
             ctx.fillStyle = '#FFC83D';
             ctx.fillText('🏆  CHAMPION  🏆', cx, cy - R * 0.40);
+        } else if (winner._isSegmentWinner && winner._isFinalSegment) {
+            // Final qualifying round winner — shown before the Grand Final cinematic
+            ctx.fillStyle = '#FF7030';
+            ctx.fillText(`🔥  ROUND ${winner._segmentNumber} WINNER  🔥`, cx, cy - R * 0.40);
         } else if (winner._isSegmentWinner) {
             ctx.fillStyle = '#FFC83D';
             ctx.fillText(`🏅  ROUND ${winner._segmentNumber} WINNER  🏅`, cx, cy - R * 0.40);
@@ -226,12 +230,19 @@ export default class WinnerRender {
             const subSize    = Math.min(R * 0.055, 9);
             ctx.font         = gf(700, subSize);
             ctx.shadowBlur   = 0;
-            ctx.fillStyle    = '#FFC83D';
+            ctx.fillStyle    = winner._isFinalSegment ? '#FF9050' : '#FFC83D';
             const wins       = winner._segmentWins ?? 0;
             ctx.fillText(
                 `${wins} WIN${wins === 1 ? '' : 'S'} THIS ROUND`,
                 cx, cy + R * 0.54
             );
+            // For the final qualifying round, add a "Final Elimination Round incoming" label
+            if (winner._isFinalSegment) {
+                const finalLabelSize = Math.min(R * 0.048, 8);
+                ctx.font      = gf(800, finalLabelSize);
+                ctx.fillStyle = 'rgba(255, 90, 30, 0.90)';
+                ctx.fillText('⚡ FINAL ELIMINATION ROUND INCOMING ⚡', cx, cy + R * 0.64);
+            }
             ctx.restore();
         }
 

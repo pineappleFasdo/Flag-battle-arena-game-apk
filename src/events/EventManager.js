@@ -17,34 +17,30 @@ import OrbitDrainEvent     from "./events/OrbitDrainEvent.js";
 import BlenderEvent        from "./events/BlenderEvent.js";
 import TidalWaveEvent      from "./events/TidalWaveEvent.js";
 import ShockwaveEvent      from "./events/ShockwaveEvent.js";
-import QuicksandEvent      from "./events/QuicksandEvent.js";
-import PinballEvent        from "./events/PinballEvent.js";
 import DriftEvent          from "./events/DriftEvent.js";
-import GravityWellsEvent   from "./events/GravityWellsEvent.js";
 import StampedeEvent       from "./events/StampedeEvent.js";
 
 // Qualifying pool only — LAST STANDING is final-exclusive (not in rotation)
 const ALL_EVENTS = [
-//     ClassicEvent,
+    ClassicEvent,
     TurboEvent,
     LowGravityEvent,
     EarthquakeEvent,
-ShrinkingArenaEvent,
+// ShrinkingArenaEvent,
     DoubleHoleEvent,
     MagnetCoreEvent,
-    WindGustEvent,
+    // WindGustEvent,
     BouncyEvent,
     ReverseGravityEvent,
     BlackHoleEvent,
-    // SpinCycleEvent,
-    // BilliardBreakEvent,
-    // OrbitDrainEvent,
+    SpinCycleEvent,
+    BilliardBreakEvent,
+    OrbitDrainEvent,
     // ── New events ──────────────────────────────────────────────────────────
-    // BlenderEvent,
-    TidalWaveEvent,
+    BlenderEvent,
+    // TidalWaveEvent,
     ShockwaveEvent,
-    // DriftEvent,
-    // GravityWellsEvent,
+    DriftEvent,
     StampedeEvent,
 ];
 

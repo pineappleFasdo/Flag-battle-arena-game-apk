@@ -2,11 +2,10 @@ import Matter from "matter-js";
 
 /**
  * TIDAL WAVE
- * A wave front sweeps left→right across the arena, pushing flags in its
- * path like a flood. Flags on the leading edge get hit hardest; flags
- * behind the wave are left to settle. After crossing, the wave resets
- * from the other side and sweeps back. Creates a clear sloshing crowd
- * motion that looks like a real wave washing through.
+ * A wave front sweeps left→right across the arena pushing flags like a
+ * flood, then reverses. The escape guard only fires when a flag has
+ * genuinely tunnelled past the wall (radius + thickness), so flags
+ * near the gap can still exit naturally through the opening.
  */
 export default class TidalWaveEvent {
     name  = "TIDAL WAVE";
@@ -14,18 +13,17 @@ export default class TidalWaveEvent {
     icon  = "🌊";
 
     _frame      = 0;
-    _waveFront  = 0;   // X position of wave front (arena-relative)
-    _direction  = 1;   // +1 = sweeping right, -1 = sweeping left
-    _WAVE_SPEED = 3.2; // px/frame — readable sweep pace
-    _WAVE_WIDTH = 55;  // px — how wide the "crest" zone is
-    _STRENGTH   = 0.0028;
-    _resetPause = 0;   // brief pause between sweeps
+    _waveFront  = 0;
+    _direction  = 1;
+    _WAVE_SPEED = 2.4;
+    _WAVE_WIDTH = 55;
+    _STRENGTH   = 0.0020;
+    _resetPause = 0;
 
     start({ arena }) {
-        this._frame     = 0;
-        this._direction = 1;
-        // Start from the left edge of the arena
-        this._waveFront = arena.cx - arena.radius - 20;
+        this._frame      = 0;
+        this._direction  = 1;
+        this._waveFront  = arena.cx - arena.radius - 20;
         this._resetPause = 0;
     }
 
@@ -34,20 +32,19 @@ export default class TidalWaveEvent {
 
         if (this._resetPause > 0) {
             this._resetPause--;
+            this._escapeGuard(flagManager.flags, arena);
             return;
         }
 
-        // Advance wave front
         this._waveFront += this._WAVE_SPEED * this._direction;
 
         const cx    = arena.cx;
         const limit = arena.radius + 20;
 
-        // Reset and reverse when wave exits the arena
         if (this._direction === 1 && this._waveFront > cx + limit) {
             this._direction  = -1;
             this._waveFront  = cx + limit;
-            this._resetPause = 40; // brief calm before reversal
+            this._resetPause = 40;
         } else if (this._direction === -1 && this._waveFront < cx - limit) {
             this._direction  = 1;
             this._waveFront  = cx - limit;
@@ -63,13 +60,9 @@ export default class TidalWaveEvent {
             const body = flags[i].body;
             if (body.isSleeping) Matter.Sleeping.set(body, false);
 
-            // Distance from flag to wave front (signed, in wave direction)
             const relX = (body.position.x - wf) * this._direction;
-
-            // Only flags within the wave crest zone feel the push
             if (relX < -half || relX > half * 0.4) continue;
 
-            // Falloff: strongest at crest, zero at edges
             const t        = 1 - Math.abs(relX) / half;
             const strength = this._STRENGTH * t * t;
 
@@ -77,6 +70,46 @@ export default class TidalWaveEvent {
                 x: this._direction * strength,
                 y: 0,
             });
+        }
+
+        this._escapeGuard(flags, arena);
+    }
+
+    /**
+     * Only catches flags that have genuinely tunnelled past the wall
+     * (beyond radius + segment thickness ~22px). Flags at the gap
+     * opening are left alone so they exit normally.
+     */
+    _escapeGuard(flags, arena) {
+        const cx    = arena.cx;
+        const cy    = arena.cy;
+        const limit = arena.radius + 22;
+
+        for (const flag of flags) {
+            const body = flag.body;
+            const dx   = body.position.x - cx;
+            const dy   = body.position.y - cy;
+            const dist = Math.hypot(dx, dy);
+
+            if (dist <= limit) continue;
+
+            const scale = (arena.radius - 2) / dist;
+            Matter.Body.setPosition(body, {
+                x: cx + dx * scale,
+                y: cy + dy * scale,
+            });
+
+            const nx     = dx / dist;
+            const ny     = dy / dist;
+            const vx     = body.velocity.x;
+            const vy     = body.velocity.y;
+            const radial = vx * nx + vy * ny;
+            if (radial > 0) {
+                Matter.Body.setVelocity(body, {
+                    x: vx - nx * radial,
+                    y: vy - ny * radial,
+                });
+            }
         }
     }
 

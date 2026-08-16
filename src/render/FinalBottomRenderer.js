@@ -42,7 +42,7 @@ export default class FinalBottomRenderer {
 
         ctx.shadowBlur = 0;
         ctx.fillStyle    = `rgba(56, 213, 255, ${pulseAlpha})`;
-        ctx.fillText(`EARTHQUAKE  ·  ${left} FLAG${left !== 1 ? 'S' : ''} LEFT`, canvasWidth / 2, headerY);
+        ctx.fillText(`ELIMINATION ROUND  ·  ${left} FLAG${left !== 1 ? 'S' : ''} LEFT`, canvasWidth / 2, headerY);
         ctx.restore();
 
         // Flags

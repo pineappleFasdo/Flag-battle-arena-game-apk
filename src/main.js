@@ -367,6 +367,18 @@ canvas.addEventListener('click', function () {
 //             Sets 3 countries to the same top win count, ends the 40-min clock,
 //             and immediately enters the sudden death round.
 //
+// Shift+8  →  5H CHAMPIONSHIP ONLY — skip to "Round 8 just ended" state.
+//             (Shift+8 sends e.key '*' on standard keyboards — both are handled.)
+//             Seeds rounds 1-7 winners, expires the current segment so the NEXT
+//             arena win triggers the round-8 winner screen (6 s) → red Final
+//             Elimination Round cinematic → elimination battle.
+//             Follow with Shift+G to skip round-8 battle entirely.
+//
+// Shift+G  →  5H CHAMPIONSHIP ONLY — jump directly to Final Elimination Round.
+//             Seeds winners if not already done, then immediately enters the
+//             red cinematic screen followed by the Last Flag Standing battle.
+//             Use after Shift+8, or standalone to test the full elim flow.
+//
 // DELETE before public release.
 document.addEventListener('keydown', function (e) {
     if (!e.shiftKey) return;
@@ -474,19 +486,48 @@ document.addEventListener('keydown', function (e) {
     }
 
     // Shift+N — skip to the next round in Highest Winner Wins OR 5H Championship.
-    //           Expires the 40-min clock immediately and ends the current round,
-    //           showing the 1-min winner display before Round N+1 starts.
+    //           Can be pressed during PLAYING, COUNTDOWN, or WINNER_SHOW (skips
+    //           the 60s display and jumps directly to the next round).
     if (e.key === 'N' || e.key === 'n') {
         if (!game.isHighestWinsMode && !game.isLongBattleMode) {
             console.warn('[DEBUG] Shift+N only works in Highest Winner Wins or 5H Championship mode.');
             return;
         }
-        if (game.gameState !== 'PLAYING' && game.gameState !== 'COUNTDOWN') {
-            console.warn('[DEBUG] Shift+N ignored — game is not PLAYING or COUNTDOWN.');
-            return;
-        }
         if (game.isLongBattleMode && game.sessionMode && game.sessionMode.inGrandFinal) {
             console.warn('[DEBUG] Shift+N — already in Grand Final, cannot skip round.');
+            return;
+        }
+
+        // If we are still on the WINNER_SHOW screen from the previous Shift+N,
+        // cancel the pending timer and immediately begin the next round.
+        if (game.gameState === 'WINNER_SHOW' && game.isLongBattleMode) {
+            if (game.restartTimer) {
+                clearTimeout(game.restartTimer);
+                game.restartTimer = null;
+            }
+            game._winnerTimerEndsAt = null;
+            try { game.audio.stopWinnerLoop(); } catch (_) {}
+            // Anchor the new segment clock to NOW with zero pause offset so the
+            // 40-min timer counts correctly from this exact moment (not from when
+            // the previous round closed with a 60s display offset still baked in).
+            if (typeof game.sessionMode.onSegmentActuallyStarted === 'function') {
+                game.sessionMode.onSegmentActuallyStarted();
+            }
+            const modeSN = game.sessionMode;
+            const nextSegSN = (modeSN?.segmentIndex ?? 0) + 1;
+            if (modeSN && !modeSN.inGrandFinal) {
+                try { game.audio.playPhase('qualify'); } catch (_) {}
+                game.audio.speak('Round ' + nextSegSN + ' begins now!');
+            } else {
+                try { game.audio.playPhase('elimination'); } catch (_) {}
+            }
+            game._beginNextEvent();
+            console.log('[DEBUG] Shift+N — skipped WINNER_SHOW, started Round', nextSegSN);
+            return;
+        }
+
+        if (game.gameState !== 'PLAYING' && game.gameState !== 'COUNTDOWN') {
+            console.warn('[DEBUG] Shift+N ignored — game is not PLAYING, COUNTDOWN, or WINNER_SHOW.');
             return;
         }
 
@@ -686,6 +727,101 @@ document.addEventListener('keydown', function (e) {
             winners.map(function (w) { return 'R' + w.segment + ':' + w.name; }).join(', '),
             '→ entering Grand Final'
         );
+        game._enterLongBattleGrandFinal();
+    }
+
+    // ── Shift+8 — Skip to "Round 8 just finished" state in 5H Championship ──
+    // Seeds 7 previous segment winners, forces current segment to expire, then
+    // triggers the full flow: 6-second winner screen → red cinematic → elimination.
+    // Use this to test the complete end-of-round-8 transition without waiting.
+    // Shift+8 produces e.key '*' (asterisk) on standard keyboards, not '8'
+    if (e.key === '*' || e.key === '8') {
+        if (!game.isLongBattleMode) {
+            console.warn('[DEBUG] Shift+8 only works in 5 Hour Championship mode.');
+            return;
+        }
+        if (game.sessionMode.inGrandFinal) {
+            console.warn('[DEBUG] Shift+8 — already in Grand Final.');
+            return;
+        }
+
+        // Seed 7 previous round winners (rounds 1-7) so only round 8 remains
+        const pool = game.allCountries || [];
+        const seedN = Math.min(7, pool.length);
+        // Clear old state fully so we can re-seed cleanly
+        game.sessionMode.segmentWinners = [];
+        game.sessionMode.segmentIndex   = 0;
+        game.winnerManager.clearWins();
+
+        for (var i8 = 0; i8 < seedN; i8++) {
+            var c8 = pool[i8];
+            // Record as a past segment winner
+            game.sessionMode.segmentWinners.push({
+                code: c8.code, name: c8.name, image: c8.image,
+                wins: 5 + i8, segment: i8 + 1,
+            });
+            // Seed leaderboard so round-8 winner pick looks plausible
+            game.winnerManager._wins[c8.code] = {
+                name: c8.name,
+                imageSrc: c8.image && c8.image.src ? c8.image.src : null,
+                wins: 3,
+            };
+            if (c8.image) game.winnerManager._imageCache[c8.code] = c8.image;
+        }
+        try { game.winnerManager._saveWins(); } catch (_) {}
+
+        // Advance segmentIndex to 7 (next win will be "round 8")
+        game.sessionMode.segmentIndex = 7;
+        // Push session time past the 5-hour mark so _closeSegment returns grand_final
+        game.sessionMode.sessionStartTime = Date.now() - (5 * 60 * 60 * 1000 + 1000);
+        // Expire the current segment so the next arena win triggers grand_final
+        game.sessionMode.segmentStartTime = Date.now() - (40 * 60 * 1000 + 1000);
+        game.sessionMode._segmentPauseOffsetMs = 0;
+
+        console.log('[DEBUG] Shift+8 — Seeded rounds 1-7, segment expired. Next arena win triggers round-8-winner → 6s screen → Final Elimination Round cinematic.');
+        console.log('[DEBUG] Tip: press Shift+G immediately after to skip round 8 battle and go directly to the Final Elimination Round screen.');
+    }
+
+    // ── Shift+G — Go directly to Final Elimination Round (cinematic + battle) ─
+    // Skips the winner screen entirely and immediately enters the red cinematic
+    // → Final Elimination round. Can be used after Shift+8 or anytime in 5H mode.
+    if (e.key === 'G' || e.key === 'g') {
+        if (!game.isLongBattleMode) {
+            console.warn('[DEBUG] Shift+G only works in 5 Hour Championship mode.');
+            return;
+        }
+        if (game.sessionMode.inGrandFinal) {
+            console.warn('[DEBUG] Shift+G — already in Grand Final.');
+            return;
+        }
+
+        // Seed winners if not already done
+        if (!game.sessionMode.segmentWinners || game.sessionMode.segmentWinners.length === 0) {
+            var winners8 = game.sessionMode.debugSeedWinnersAndGotoFinal(6);
+            console.log('[DEBUG] Shift+G — Seeded round winners:', winners8.map(function (w) { return w.name; }).join(', '));
+        } else {
+            game.sessionMode.inGrandFinal = true;
+            var lastW = game.sessionMode.segmentWinners[game.sessionMode.segmentWinners.length - 1];
+            game.sessionMode.lastSegmentWinner = lastW || null;
+        }
+
+        // Seed leaderboard if pool exists
+        var poolG = game.allCountries || [];
+        if (poolG.length && !Object.keys(game.winnerManager._wins || {}).length) {
+            game.winnerManager.clearWins();
+            for (var ig = 0; ig < Math.min(6, poolG.length); ig++) {
+                var cg = poolG[ig];
+                game.winnerManager._wins[cg.code] = {
+                    name: cg.name,
+                    imageSrc: cg.image && cg.image.src ? cg.image.src : null,
+                    wins: 6 - ig,
+                };
+                if (cg.image) game.winnerManager._imageCache[cg.code] = cg.image;
+            }
+            try { game.winnerManager._saveWins(); } catch (_) {}
+        }
+
+        console.log('[DEBUG] Shift+G — Jumping straight to Final Elimination Round cinematic + battle.');
         game._enterLongBattleGrandFinal();
     }
 });
