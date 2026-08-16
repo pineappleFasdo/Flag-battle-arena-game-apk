@@ -52,29 +52,18 @@ export default class Flag {
         ctx.translate(p.x, p.y);
         ctx.rotate(angle);
 
-        // FIX CRISP: Use high-quality image interpolation so flags look sharp
-        // even when drawn at sizes that don't exactly match the source resolution.
+        // No shadow / blur / rounded corners on arena flags
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = "transparent";
         ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';
+        ctx.imageSmoothingQuality = "high";
 
         const img = this.country.image;
 
-        // Always prefer the real flag image when it is loaded
         if (img && img.complete && img.naturalWidth > 0) {
-            // Only clip rounded corners on larger flags (saves CPU on tiny ones)
-            if (w >= 16) {
-                const radius = Math.max(1.5, w * 0.08);
-                ctx.beginPath();
-                if (typeof ctx.roundRect === "function") {
-                    ctx.roundRect(-w / 2, -h / 2, w, h, radius);
-                } else {
-                    ctx.rect(-w / 2, -h / 2, w, h);
-                }
-                ctx.clip();
-            }
+            // Sharp rectangle — no roundRect clip
             ctx.drawImage(img, -w / 2, -h / 2, w, h);
         } else {
-            // Fallback only while image is still loading
             ctx.fillStyle = "#446688";
             ctx.fillRect(-w / 2, -h / 2, w, h);
         }

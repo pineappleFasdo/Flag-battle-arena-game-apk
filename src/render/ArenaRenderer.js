@@ -15,13 +15,12 @@ export default class ArenaRenderer {
 
         const gapAngle = (arena.gapSize / arena.segmentCount) * Math.PI * 2;
 
-        ctx.strokeStyle = ringGlow;
-        ctx.lineWidth   = 7;
-        ctx.lineCap     = "round";
-        this._strokeRing(ctx, arena, gapAngle);
-
+        // Single crisp ring stroke — no glow / blur layer
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = "transparent";
         ctx.strokeStyle = ring;
         ctx.lineWidth   = 3.5;
+        ctx.lineCap     = "butt";
         this._strokeRing(ctx, arena, gapAngle);
 
         ctx.restore();

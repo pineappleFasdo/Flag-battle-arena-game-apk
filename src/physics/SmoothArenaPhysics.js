@@ -6,7 +6,7 @@
  * Pass-2 goals vs World Flags-style footage:
  *  - Straight-line motion only (NO circular / orbital / swirl forces)
  *  - Sustained linear speed, strong wall bounce, no spin
- *  - Mild radial center push only when packed
+ *  - No center/middle push force (removed for testing)
  *  - Near gap: pure outward (radial) push — clean straight exits
  *  - One ring only — no secondary rim
  */
@@ -49,6 +49,7 @@ export default class SmoothArenaPhysics {
         this._swayX  = 0;
         this._swayY  = 0;
 
+        this.isSmoothArena = true;
         this.rimEnabled   = false;
         this.rimSegments  = [];
         this.rimAngle     = 0;
@@ -242,6 +243,21 @@ export default class SmoothArenaPhysics {
                 Matter.Body.setAngle(body, 0);
             }
 
+            const px0 = body.position.x;
+            const py0 = body.position.y;
+            const dx0 = px0 - cx;
+            const dy0 = py0 - cy;
+            const dist0 = Math.hypot(dx0, dy0) || 0.001;
+            // Already past the visual ring → fling outward so elimination picks them up
+            if (dist0 > R + 2) {
+                const outSpd = 8 + Math.random() * 4;
+                Matter.Body.setVelocity(body, {
+                    x: (dx0 / dist0) * outSpd,
+                    y: (dy0 / dist0) * outSpd,
+                });
+                continue;
+            }
+
             const px = body.position.x;
             const py = body.position.y;
             const dx = px - cx;
@@ -262,15 +278,6 @@ export default class SmoothArenaPhysics {
                 vy = Math.sin(heading) * boost;
                 Matter.Body.setVelocity(body, { x: vx, y: vy });
                 spd = boost;
-            }
-
-            // ── 2) Mild center push only if deeply packed (radial, not orbital)
-            if (dist < R * 0.38 && n > 3) {
-                const push = 0.00007 * (R * 0.38 - dist);
-                Matter.Body.applyForce(body, body.position, {
-                    x: (dx / dist) * push,
-                    y: (dy / dist) * push,
-                });
             }
 
             // ── 3) Near gap sector on the rim: push STRAIGHT outward through gap

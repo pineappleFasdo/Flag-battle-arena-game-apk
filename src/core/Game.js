@@ -807,7 +807,7 @@ export default class Game {
             // Point drain + elimination at the new arena
             if (this.drain) this.drain.arena = smooth;
             if (this.eliminationManager) this.eliminationManager.arena = smooth;
-            console.log("[LongBattle] SmoothArenaPhysics active for Grand Final");
+            console.log("[SmoothArena] active");
         } catch (e) {
             console.warn("[LongBattle] Smooth arena activate failed", e);
         }
@@ -840,9 +840,31 @@ export default class Game {
                 if (this.eliminationManager) this.eliminationManager.arena = def;
             }
             this._smoothArenaActive = false;
-            console.log("[LongBattle] Restored default ArenaPhysics");
+            console.log("[SmoothArena] restored default ArenaPhysics");
         } catch (e) {
             console.warn("[LongBattle] Restore arena failed", e);
+        }
+    }
+
+
+    /**
+     * Classic event (test) + 5H Grand Final → SmoothArenaPhysics.
+     * Any other event → default ArenaPhysics.
+     * Does not change scoring, leaderboard, or round timers.
+     */
+    _syncSmoothArenaForCurrentEvent() {
+        const evName = (this.eventManager?.name || this.eventManager?.current?.name || "").toUpperCase();
+        const isClassic = evName === "CLASSIC";
+        const isLongBattleGF = !!(this.isFinalMode && this.isLongBattleMode);
+        const wantSmooth = isClassic || isLongBattleGF || !!this.sessionMode?.inGrandFinal;
+
+        if (wantSmooth) {
+            this._activateSmoothArenaForLongBattleFinal();
+        } else {
+            // Never tear down mid-GF
+            if (!(this.isFinalMode && this.isLongBattleMode)) {
+                this._restoreDefaultArena();
+            }
         }
     }
 
@@ -1180,10 +1202,14 @@ export default class Game {
         } else if (this.isHighestWinsMode || this.isLongBattleMode) {
             // Highest Wins / Long Battle: everyone stays eligible; mode picks the batch
             this.activeCountries = this.sessionMode.pickBatch();
-            this.eventManager.pick();
+            // Test: localStorage flag_battle_test_classic_smooth=1 forces CLASSIC + smooth physics
+            if (this._wantClassicSmoothTest()) this.eventManager.pickClassic();
+            else this.eventManager.pick();
         } else {
             // Classic qualifying: winners sit out until pool recycles
             this.activeCountries = this._pickQualifyBatch();
+            if (this._wantClassicSmoothTest()) this.eventManager.pickClassic();
+            else this.eventManager.pick();
         }
 
         this.totalCountries = this.activeCountries.length;
@@ -1325,6 +1351,8 @@ export default class Game {
             console.warn("[Game] _beginCountdown blocked — champion locked");
             return;
         }
+        // Classic (test) or 5H GF → smooth physics; else default
+        this._syncSmoothArenaForCurrentEvent();
         this.gameState           = "COUNTDOWN";
         this.restartCountdown    = 3;
         this._countdownTickStart = performance.now();
