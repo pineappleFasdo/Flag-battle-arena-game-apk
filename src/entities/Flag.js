@@ -2,6 +2,10 @@ import Matter from "matter-js";
 
 export default class Flag {
 
+    /** Set from Game when flag count is high — cheaper canvas draws */
+    static crowdDraw = false;
+
+
     constructor(world, country, x, y, width, height) {
 
         this.country = country;
@@ -13,29 +17,28 @@ export default class Flag {
             this.width, this.height,
             {
                 label       : "flag",
-                restitution : 0.6,
-                friction    : 0.005,
-                frictionAir : 0.020,
-                density     : 0.0012,
-                chamfer     : { radius: Math.max(1, width * 0.06) },
-                sleepThreshold: 80,
+                restitution : 0.92,
+                friction    : 0.002,
+                frictionAir : 0.012,
+                density     : 0.001,
+                // No chamfer — keeps orientation stable
+                sleepThreshold: Infinity, // never auto-sleep; must keep stirring
             }
         );
 
         Matter.World.add(world, this.body);
 
-        const speed = Math.max(1.2, this.width * 0.12);
-        const angle = Math.random() * Math.PI * 2;
+        // Straight horizontal orientation — no tilt / no spin
+        Matter.Body.setAngle(this.body, 0);
+        Matter.Body.setAngularVelocity(this.body, 0);
 
+        // Immediate motion so flags collide as soon as they appear
+        const speed = Math.max(3.5, this.width * 0.35);
+        const heading = Math.random() * Math.PI * 2;
         Matter.Body.setVelocity(this.body, {
-            x: Math.cos(angle) * speed,
-            y: Math.sin(angle) * speed
+            x: Math.cos(heading) * speed,
+            y: Math.sin(heading) * speed,
         });
-
-        Matter.Body.setAngularVelocity(
-            this.body,
-            (Math.random() - 0.5) * 0.12
-        );
 
         this._stillFrames = 0;
     }
@@ -55,8 +58,13 @@ export default class Flag {
         // No shadow / blur / rounded corners on arena flags
         ctx.shadowBlur = 0;
         ctx.shadowColor = "transparent";
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
+        // PERFORMANCE: high-quality smoothing only when field is thin
+        if (Flag.crowdDraw) {
+            ctx.imageSmoothingEnabled = false;
+        } else {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = "high";
+        }
 
         const img = this.country.image;
 

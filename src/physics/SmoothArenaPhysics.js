@@ -66,7 +66,7 @@ export default class SmoothArenaPhysics {
         // Motion constants (tuned for lively but readable play)
         this._minSpeed     = 2.2;
         this._maxSpeed     = 11;
-        this._wallBounce   = 0.92;
+        this._wallBounce   = 1.25;
         this._airDrag      = 0.012;
 
         this._buildSegments();
@@ -99,9 +99,9 @@ export default class SmoothArenaPhysics {
                     isStatic: true,
                     label: "arenaWall",
                     restitution: this._wallBounce,
-                    friction: 0.001,
-                    frictionStatic: 0.001,
-                    slop: 0.08,
+                    friction: 0,
+                    frictionStatic: 0,
+                    slop: 0.05,
                     collisionFilter: { category: 0x0001, mask: 0xFFFFFFFF },
                     render: { visible: false },
                 }
@@ -334,7 +334,7 @@ export default class SmoothArenaPhysics {
             const body = flag?.body;
             if (!body) continue;
 
-            body.restitution    = 0.88;
+            body.restitution    = 0.92;
             body.friction       = 0.004;
             body.frictionAir    = 0.012;
             body.frictionStatic = 0.004;
@@ -350,9 +350,9 @@ export default class SmoothArenaPhysics {
 
             try { Matter.Sleeping.set(body, false); } catch (_) {}
 
-            // Strong initial launch so the round starts energetic
+            // Horizontal + energetic launch — collide immediately
             const a = Math.random() * Math.PI * 2;
-            const s = 3.5 + Math.random() * 3.5;
+            const s = 4.0 + Math.random() * 3.0;
             Matter.Body.setVelocity(body, {
                 x: Math.cos(a) * s,
                 y: Math.sin(a) * s,

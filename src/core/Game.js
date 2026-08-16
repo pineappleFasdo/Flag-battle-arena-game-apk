@@ -847,6 +847,16 @@ export default class Game {
     }
 
 
+    /** localStorage flag_battle_test_classic_smooth=1 → force CLASSIC for physics testing */
+    _wantClassicSmoothTest() {
+        try {
+            return typeof localStorage !== "undefined"
+                && localStorage.getItem("flag_battle_test_classic_smooth") === "1";
+        } catch (_) {
+            return false;
+        }
+    }
+
     /**
      * Classic event (test) + 5H Grand Final → SmoothArenaPhysics.
      * Any other event → default ArenaPhysics.
@@ -1439,6 +1449,38 @@ export default class Game {
         }, 1000);
     }
 
+    /**
+     * During COUNTDOWN: lock horizontal + keep minimum speed so packed flags
+     * do not freeze or tilt while the arena is building.
+     */
+    _stirFlagsDuringBuild() {
+        const flags = this.flagManager?.flags;
+        if (!flags || !flags.length) return;
+        const minSpd = 2.8;
+        for (let i = 0; i < flags.length; i++) {
+            const body = flags[i]?.body;
+            if (!body) continue;
+            try {
+                if (body.isSleeping) Matter.Sleeping.set(body, false);
+                Matter.Body.setAngularVelocity(body, 0);
+                if (Math.abs(body.angle) > 0.001) Matter.Body.setAngle(body, 0);
+            } catch (_) {}
+            try {
+                const vx = body.velocity.x;
+                const vy = body.velocity.y;
+                const spd = Math.hypot(vx, vy);
+                if (spd < minSpd) {
+                    const a = Math.random() * Math.PI * 2;
+                    const s = minSpd + Math.random() * 2.5;
+                    Matter.Body.setVelocity(body, {
+                        x: Math.cos(a) * s,
+                        y: Math.sin(a) * s,
+                    });
+                }
+            } catch (_) {}
+        }
+    }
+
     _startPlaying() {
         this.gameState     = "PLAYING";
         this.arena.state   = "PLAYING";
@@ -1450,6 +1492,34 @@ export default class Game {
             }
         } catch (_) {}
         this.arena.syncWalls();
+
+        // Horizontal orientation + immediate motion so flags collide right away
+        try {
+            const flags = this.flagManager?.flags || [];
+            for (const flag of flags) {
+                const body = flag?.body;
+                if (!body) continue;
+                try {
+                    Matter.Body.setAngle(body, 0);
+                    Matter.Body.setAngularVelocity(body, 0);
+                    Matter.Sleeping.set(body, false);
+                } catch (_) {}
+                const spd = Math.hypot(body.velocity.x, body.velocity.y);
+                if (spd < 2.5) {
+                    const a = Math.random() * Math.PI * 2;
+                    const s = 3.2 + Math.random() * 2.8;
+                    Matter.Body.setVelocity(body, {
+                        x: Math.cos(a) * s,
+                        y: Math.sin(a) * s,
+                    });
+                }
+            }
+            if (this._smoothArenaActive) {
+                SmoothArenaPhysics.tuneFlagBodies(flags);
+                this._smoothTunePending = false;
+            }
+        } catch (_) {}
+
         this.audio.playRoundStart();
         // If championship already finished, never keep battle BGM running
         if (this.sessionMode && this.sessionMode.ended) {
@@ -1684,18 +1754,26 @@ export default class Game {
             }
             this.physics.update();
             this.arena.update();
+            // Keep flags horizontal + moving while arena builds
+            try { this._stirFlagsDuringBuild(); } catch (_) {}
         }
 
         if (state === "PLAYING") {
+            const liveCount = this.flagManager?.flags?.length ?? 0;
+            // PERFORMANCE: scale solver + draw cost with flag count (rules unchanged)
+            try { this.physics.setFlagLoad(liveCount); } catch (_) {}
+            try {
+                const sample = this.flagManager.flags[0];
+                if (sample?.constructor) sample.constructor.crowdDraw = liveCount > 80;
+            } catch (_) {}
             this.arena.update();
             this.eventManager.update(this._eventCtx());
             this.physics.update();
             this.flagManager.update(this._smoothArenaActive ? null : this.arena);
-        if (this._smoothTunePending && this.flagManager.flags.length >= (this._spawnTotal || 0)) {
-            SmoothArenaPhysics.tuneFlagBodies(this.flagManager.flags);
-            this._smoothTunePending = false;
-        }
-
+            if (this._smoothTunePending && this.flagManager.flags.length >= (this._spawnTotal || 0)) {
+                SmoothArenaPhysics.tuneFlagBodies(this.flagManager.flags);
+                this._smoothTunePending = false;
+            }
 
             if (!this.arena.isIntro) {
                 // Final-mode freeze: gap sealed during ELIMINATED card + settle
@@ -1735,7 +1813,11 @@ export default class Game {
 
                     // Skip classic drain in final mode — LastStandingEvent owns forces
                     // (avoids double tangential pull that creates rim-snake motion)
-                    if (evenFrame && !this.isFinalMode) {
+                    // PERFORMANCE: drain less often when the arena is crowded
+                    const nFlags = this.flagManager.flags.length;
+                    const drainEvery = nFlags > 180 ? 3 : (nFlags > 100 ? 2 : 1);
+                    const runDrain = ((this._frame % drainEvery) === 0);
+                    if (runDrain && !this.isFinalMode) {
                         this.drain.update();
                         this.drain.applyDrainForce(this.flagManager.flags);
                     } else if (evenFrame && this.isFinalMode) {

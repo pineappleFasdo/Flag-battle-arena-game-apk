@@ -56,7 +56,7 @@ export default class ArenaPhysics {
                 {
                     isStatic    : true,
                     angle       : segAngle,
-                    restitution : 1.0,
+                    restitution : 1.25,
                     friction    : 0,
                     label       : "arenaWall"
                 }
@@ -109,8 +109,8 @@ export default class ArenaPhysics {
                 chord,
                 {
                     isStatic: true,
-                    restitution: 0.55,  // was 1.05 — absorbs energy on contact, slows flags down
-                    friction: 0.08,     // slight drag on rim contact
+                    restitution: 1.15,  // strong bounce — stops late-game wall hugging
+                    friction: 0,
                     frictionStatic: 0,
                     label: "arenaRimWall",
                     collisionFilter: { category: 0x0002, mask: 0xFFFFFFFF },

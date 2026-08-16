@@ -14,6 +14,7 @@ export default class FlagManager {
     constructor(world) {
         this.world = world;
         this.flags = [];
+        this._perfFrame = 0;
     }
 
 
@@ -30,6 +31,11 @@ export default class FlagManager {
     update(arena = null) {
 
         const maxSpd = MAX_SPEED;
+        this._perfFrame = (this._perfFrame + 1) | 0;
+        const n = this.flags.length;
+        // PERFORMANCE: when crowded, only run anti-stuck on half the flags per frame
+        const crowd = n > 100;
+        const even = (this._perfFrame & 1) === 0;
 
         for (let i = this.flags.length - 1; i >= 0; i--) {
             const flag = this.flags[i];
@@ -41,6 +47,12 @@ export default class FlagManager {
                 continue;
             }
 
+            // Horizontal lock every frame (no tilted flags)
+            try {
+                if (body.angularVelocity !== 0) Matter.Body.setAngularVelocity(body, 0);
+                if (body.angle !== 0) Matter.Body.setAngle(body, 0);
+            } catch (_) {}
+
             // ── Speed clamp ────────────────────────────────────────────────
             const vx = body.velocity.x;
             const vy = body.velocity.y;
@@ -48,6 +60,11 @@ export default class FlagManager {
             if (spd > maxSpd) {
                 const s = maxSpd / spd;
                 Matter.Body.setVelocity(body, { x: vx * s, y: vy * s });
+            }
+
+            // Crowd: skip anti-stuck on alternate indices this frame
+            if (crowd && ((i & 1) === 0) !== even) {
+                continue;
             }
 
             // ── Anti-stuck (only when near wall — early-game center flags ignored) ──

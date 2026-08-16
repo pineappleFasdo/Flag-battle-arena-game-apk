@@ -178,12 +178,12 @@ export default class AudioManager {
         this._lastFlagCollision = now;
         const ctx = this._resume();
         if (!ctx) return;
-        const t        = ctx.currentTime;
-        const baseFreq = 130 * Math.pow(2, Math.random() * 2);
-        const gain     = 0.10 + Math.random() * 0.06;
-        this._tone(baseFreq,       t, 0.06, gain,        'sine', 0.055);
-        this._tone(baseFreq * 1.5, t, 0.03, gain * 0.35, 'sine', 0.025);
-        this._noise(t, 0.025, gain * 0.45, 900);
+        const t = ctx.currentTime;
+        // Louder soft bubble pop (flag–flag)
+        const f = 240 + Math.random() * 160;
+        this._tone(f, t, 0.07, 0.16, 'sine', 0.05);
+        this._tone(f * 0.55, t + 0.018, 0.08, 0.10, 'sine', 0.06);
+        this._tone(f * 1.8, t, 0.04, 0.06, 'sine', 0.03);
     }
 
     _playWallHit() {
@@ -192,24 +192,16 @@ export default class AudioManager {
         this._lastWallCollision = now;
         const ctx = this._resume();
         if (!ctx) return;
-        const t        = ctx.currentTime;
-        const baseFreq = 300 + Math.random() * 400;
-        const gain     = 0.07 + Math.random() * 0.04;
-        this._tone(baseFreq, t, 0.04, gain, 'triangle', 0.035);
-        this._noise(t, 0.018, gain * 0.55, 2200);
+        const t = ctx.currentTime;
+        // Louder soft bubble against wall
+        const f = 180 + Math.random() * 140;
+        this._tone(f, t, 0.06, 0.13, 'sine', 0.04);
+        this._tone(f * 1.4, t + 0.012, 0.05, 0.07, 'sine', 0.04);
     }
 
     playElimination() {
-        // Soothing soft chime — gentle descending sine tones, no harsh square waves
-        const ctx = this._resume();
-        if (!ctx) return;
-        const t = ctx.currentTime;
-        // Soft bell-like chime: mid-range sine, gentle fade
-        this._tone(660, t,        0.18, 0.12, 'sine', 0.15);
-        this._tone(495, t + 0.08, 0.22, 0.09, 'sine', 0.18);
-        this._tone(392, t + 0.16, 0.28, 0.07, 'sine', 0.24);
-        // Very soft high shimmer
-        this._tone(1320, t, 0.05, 0.04, 'sine', 0.04);
+        // Exit mechanism audio fully disabled
+        return;
     }
 
     playRoundStart() {
