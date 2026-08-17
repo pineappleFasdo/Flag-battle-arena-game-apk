@@ -32,8 +32,8 @@ export default class Flag {
         Matter.Body.setAngle(this.body, 0);
         Matter.Body.setAngularVelocity(this.body, 0);
 
-        // Immediate motion so flags collide as soon as they appear
-        const speed = Math.max(3.5, this.width * 0.35);
+        // Gentle initial motion — opening collisions stay readable
+        const speed = Math.max(1.6, this.width * 0.18);
         const heading = Math.random() * Math.PI * 2;
         Matter.Body.setVelocity(this.body, {
             x: Math.cos(heading) * speed,

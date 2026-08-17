@@ -291,11 +291,11 @@ export default class SpaceTheme {
         const baseAngle = Math.atan2(arenaY-y, arenaX-x);
         const angle     = baseAngle + (Math.random()-0.5)*0.70;
 
-        const speed = 6 + Math.random()*4; // slower — crosses screen in ~3-4 s
+        const speed = 4 + Math.random()*2.5; // slower — crosses screen in ~4-5 s
         const vx = Math.cos(angle)*speed;
         const vy = Math.sin(angle)*speed;
 
-        const size  = 14 + Math.random()*14;  // 14-28px — chunky rocks
+        const size  = 12 + Math.random()*10;  // 12-22px — slightly smaller big rocks
         const spin  = (Math.random()-0.5)*0.10;
         const rot   = Math.random()*Math.PI*2;
         // More sides + deeper jagged cuts = realistic rocky silhouette like reference image
@@ -329,13 +329,13 @@ export default class SpaceTheme {
         if (this._asteroidsDisabled) return;
         this._showerState         = "ACTIVE";
         this._showerActiveFrames  = 0;
-        // Mobile: fewer asteroids per shower to stay within budget
+        // Fewer asteroids, spread longer so shower feels slower
         const count = this._isMobile
-            ? (4 + Math.floor(Math.random()*3))   // 4-6 on mobile
-            : (6 + Math.floor(Math.random()*5));   // 6-10 on desktop
+            ? (2 + Math.floor(Math.random()*2))   // 2-3 on mobile
+            : (3 + Math.floor(Math.random()*3));   // 3-5 on desktop
         this._showerBatchLeft     = count;
-        // Spread over ~5 s so rocks drift in more slowly
-        this._showerBatchInterval = Math.max(1, Math.floor((4*60)/count));
+        // Spread over ~6 s
+        this._showerBatchInterval = Math.max(1, Math.floor((6*60)/count));
         this._warningLife         = this._WARNING_DUR;
 
         // 🔊 Swoosh — deep space whoosh as the shower begins

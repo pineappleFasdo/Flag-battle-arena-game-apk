@@ -1,12 +1,21 @@
 import { gf, GAME_FONT } from '../GameFont.js';
 export default class ProgressBarRenderer {
 
+    constructor() {
+        this._themeId = 'classic';
+    }
+
+    setTheme(theme) {
+        this._themeId = theme?.id || 'classic';
+    }
+
     draw(ctx, eliminatedFlags, total, centerX, y, width, barHeight = 18) {
 
         const eliminated = eliminatedFlags.length;
         // Clamp so multi-exit / recovery never shows negative counts on stream
         const alive      = Math.max(0, total - eliminated);
         const fraction   = total > 0 ? Math.max(0, Math.min(1, alive / total)) : 0;
+        const isSpace    = this._themeId === 'space';
 
         const barX = centerX - width / 2;
         const barY = y;
@@ -15,17 +24,23 @@ export default class ProgressBarRenderer {
         ctx.save();
 
         // Track — secondary BG
-        ctx.fillStyle = '#0A1226';
+        ctx.fillStyle = isSpace ? '#0A0618' : '#0A1226';
         ctx.beginPath();
         ctx.roundRect(barX, barY, width, barHeight, r);
         ctx.fill();
 
-        // Fill — electric blue → cyan, shift toward danger when low
+        // Fill — theme accent, shift toward danger when low
         if (fraction > 0) {
             let fillColor;
-            if      (fraction > 0.65) fillColor = '#3D7CFF';
-            else if (fraction > 0.35) fillColor = '#38D5FF';
-            else                      fillColor = '#FF5368';
+            if (isSpace) {
+                if      (fraction > 0.65) fillColor = '#A078FF';
+                else if (fraction > 0.35) fillColor = '#64C8FF';
+                else                      fillColor = '#FF5368';
+            } else {
+                if      (fraction > 0.65) fillColor = '#3D7CFF';
+                else if (fraction > 0.35) fillColor = '#38D5FF';
+                else                      fillColor = '#FF5368';
+            }
 
             ctx.save();
             ctx.beginPath();
@@ -37,7 +52,7 @@ export default class ProgressBarRenderer {
         }
 
         // Border
-        ctx.strokeStyle = 'rgba(46, 98, 232, 0.45)';
+        ctx.strokeStyle = isSpace ? 'rgba(160, 120, 255, 0.50)' : 'rgba(46, 98, 232, 0.45)';
         ctx.lineWidth   = 1;
         ctx.beginPath();
         ctx.roundRect(barX, barY, width, barHeight, r);

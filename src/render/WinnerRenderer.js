@@ -1,12 +1,18 @@
 import { gf, GAME_FONT } from '../GameFont.js';
+import { themeUI } from '../themes/ThemeConfig.js';
 // WinnerRenderer.js
-// Premium champion presentation — blue/navy cinematic rays, gold for Champion/trophy/wins
+// Premium champion presentation — theme-driven rays / panels
 
 export default class WinnerRender {
 
     constructor() {
         this._rayAngle  = 0;
         this._ringPhase = 0;
+        this._theme     = null;
+    }
+
+    setTheme(theme) {
+        this._theme = theme;
     }
 
     draw(ctx, winner, canvasWidth, canvasHeight, isCountdown = false, animT = 1,
@@ -28,6 +34,7 @@ export default class WinnerRender {
     _drawWinner(ctx, winner, cw, ch, isCountdown, animT, arenaX, arenaY, arenaR, isFinalMode, finalFlagsLeft, nextRoundSecsRemain = null) {
         const ease = this._easeOutBack(Math.min(1, animT));
         const fade = Math.min(1, animT * 1.6);
+        const ui   = themeUI(this._theme);
 
         const cx = (arenaX !== undefined) ? arenaX : cw / 2;
         const cy = (arenaY !== undefined) ? arenaY : ch * 0.45;
@@ -36,15 +43,14 @@ export default class WinnerRender {
         this._rayAngle  += 0.006;
         this._ringPhase  = (this._ringPhase + 0.018) % 1;
 
-        // Always blue/navy cinematic (no brown/gold rays)
-        const rayColor1 = 'rgba(61, 124, 255, 1)';
-        const rayColor2 = 'rgba(16, 29, 56, 1)';
-        const glowColor = '61,124,255';
+        const rayColor1 = ui.ray1;
+        const rayColor2 = ui.ray2;
+        const glowColor = ui.glow;
 
         ctx.save();
 
         // Dim screen
-        ctx.fillStyle = `rgba(5, 8, 22, ${0.62 * fade})`;
+        ctx.fillStyle = ui.overlay.replace(/[\d.]+\)$/, `${0.62 * fade})`);
         ctx.fillRect(0, 0, cw, ch);
 
         // Clip to arena circle
@@ -53,13 +59,15 @@ export default class WinnerRender {
         ctx.arc(cx, cy, R * 0.98, 0, Math.PI * 2);
         ctx.clip();
 
-        // Dark navy background inside arena
+        // Theme radial background inside arena
         const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
-        bgGrad.addColorStop(0,   `rgba(16, 29, 56, ${0.96 * fade})`);
-        bgGrad.addColorStop(0.5, `rgba(10, 18, 38, ${0.94 * fade})`);
-        bgGrad.addColorStop(1,   `rgba(5, 8, 22, ${0.90 * fade})`);
+        bgGrad.addColorStop(0,   ui.panel);
+        bgGrad.addColorStop(0.55, ui.panelDeep);
+        bgGrad.addColorStop(1,   ui.panelDeep);
+        ctx.globalAlpha = 0.94 * fade;
         ctx.fillStyle = bgGrad;
         ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+        ctx.globalAlpha = 1;
 
         // Blue cinematic sun rays
         const rayCount = 12;
@@ -133,7 +141,11 @@ export default class WinnerRender {
         ctx.font         = gf(900, labelSize);
         ctx.shadowBlur = 0;
 
-        if (isFinalMode) {
+        // Unique 5H title only when explicitly flagged (permanent 5H page)
+        if (winner._isGrandChampion) {
+            ctx.fillStyle = '#FFC83D';
+            ctx.fillText('5H CHAMPIONSHIP', cx, cy - R * 0.48);
+        } else if (isFinalMode) {
             ctx.fillStyle = '#FFC83D';
             ctx.fillText('🏆  CHAMPION  🏆', cx, cy - R * 0.40);
         } else if (winner._isSegmentWinner && winner._isFinalSegment) {
@@ -144,12 +156,12 @@ export default class WinnerRender {
             ctx.fillStyle = '#FFC83D';
             ctx.fillText(`🏅  ROUND ${winner._segmentNumber} WINNER  🏅`, cx, cy - R * 0.40);
         } else {
-            ctx.fillStyle = '#38D5FF';
+            ctx.fillStyle = ui.title;
             ctx.fillText('ROUND WINNER', cx, cy - R * 0.40);
         }
         ctx.restore();
 
-        // Flag in premium blue/gold card frame
+        // Flag in premium theme card frame
         const img = winner.country?.image;
         if (img && img.complete && img.naturalWidth > 0) {
             const flagW = R * 0.58 * ease;
@@ -167,17 +179,17 @@ export default class WinnerRender {
             ctx.globalAlpha = fade;
 
             // Card background
-            ctx.fillStyle = '#101D38';
+            ctx.fillStyle = ui.panel;
             ctx.beginPath();
             if (typeof ctx.roundRect === 'function') ctx.roundRect(cardX, cardY, cardW, cardH, cardR);
             else ctx.rect(cardX, cardY, cardW, cardH);
             ctx.fill();
 
-            // Electric-blue + gold dual border
-            ctx.strokeStyle = '#2E62E8';
+            // Theme border + soft gold inner
+            ctx.strokeStyle = ui.border;
             ctx.lineWidth   = 1.5;
             ctx.stroke();
-            ctx.strokeStyle = 'rgba(255, 200, 61, 0.55)';
+            ctx.strokeStyle = 'rgba(255, 200, 61, 0.45)';
             ctx.lineWidth   = 1;
             ctx.beginPath();
             if (typeof ctx.roundRect === 'function') ctx.roundRect(cardX + 2, cardY + 2, cardW - 4, cardH - 4, cardR - 1);
@@ -218,6 +230,27 @@ export default class WinnerRender {
             ctx.shadowBlur   = 0;
             ctx.fillStyle    = '#38D5FF';
             ctx.fillText(`${finalFlagsLeft} FLAGS REMAINING`, cx, cy + R * 0.60);
+            ctx.restore();
+        }
+
+        // 5H ultimate champion — single big trophy + clean subtitle
+        if (winner._isGrandChampion) {
+            ctx.save();
+            ctx.globalAlpha  = fade;
+            ctx.textAlign    = 'center';
+            ctx.textBaseline = 'middle';
+            const pulse = 1 + 0.07 * Math.sin(Date.now() / 300);
+            const tropSize = Math.min(R * 0.28, 56) * pulse;
+            ctx.font = `${tropSize}px system-ui, Apple Color Emoji, sans-serif`;
+            ctx.fillText('🏆', cx, cy - R * 0.70);
+            const subSize = Math.min(R * 0.07, 13);
+            ctx.font = gf(800, subSize);
+            ctx.fillStyle = '#FFC83D';
+            ctx.fillText('CHAMPION', cx, cy + R * 0.52);
+            const tagSize = Math.min(R * 0.048, 10);
+            ctx.font = gf(600, tagSize);
+            ctx.fillStyle = ui.muted;
+            ctx.fillText('ULTIMATE FLAG ARENA TITLE', cx, cy + R * 0.60);
             ctx.restore();
         }
 

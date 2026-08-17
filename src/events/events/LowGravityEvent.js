@@ -4,7 +4,8 @@ export default class LowGravityEvent {
     icon  = "🌙";
 
     start({ physics }) {
-        physics.engine.world.gravity.y = 0.003;
+        // Slightly stronger so effect stays visible under SmoothArena residual stir
+        physics.engine.world.gravity.y = 0.006;
         physics.engine.world.gravity.x = 0;
     }
 

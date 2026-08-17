@@ -8,6 +8,11 @@ export default class BottomTrayRenderer {
 
     constructor() {
         this._layoutCache = null;
+        this._themeId = 'classic';
+    }
+
+    setTheme(theme) {
+        this._themeId = theme?.id || 'classic';
     }
 
     /**
@@ -22,15 +27,21 @@ export default class BottomTrayRenderer {
 
         const padding = 5;
         const trayTop = canvasHeight - trayHeight;
+        const isSpace = this._themeId === 'space';
 
         // Background — secondary / panels
         const gradient = ctx.createLinearGradient(0, trayTop, 0, canvasHeight);
-        gradient.addColorStop(0, 'rgba(16, 29, 56, 0.97)');
-        gradient.addColorStop(1, 'rgba(5, 8, 22, 1)');
+        if (isSpace) {
+            gradient.addColorStop(0, 'rgba(12, 6, 28, 0.97)');
+            gradient.addColorStop(1, 'rgba(4, 2, 12, 1)');
+        } else {
+            gradient.addColorStop(0, 'rgba(16, 29, 56, 0.97)');
+            gradient.addColorStop(1, 'rgba(5, 8, 22, 1)');
+        }
         ctx.fillStyle = gradient;
         ctx.fillRect(0, trayTop, canvasWidth, trayHeight);
 
-        ctx.strokeStyle = 'rgba(46, 98, 232, 0.40)';
+        ctx.strokeStyle = isSpace ? 'rgba(160, 120, 255, 0.45)' : 'rgba(46, 98, 232, 0.40)';
         ctx.lineWidth   = 1.2;
         ctx.beginPath();
         ctx.moveTo(0, trayTop);

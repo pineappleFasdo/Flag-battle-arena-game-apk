@@ -151,6 +151,49 @@ export default class Confetti {
         );
     }
 
+    /**
+     * Firecracker burst — radial sparks from random sky points (endless champ screen).
+     */
+    burstFireworks(canvasWidth, canvasHeight) {
+        const colors = [
+            "#FFD700", "#FF6B6B", "#4ECDC4", "#FFE66D",
+            "#A078FF", "#FF8C28", "#ffffff", "#FF2D55",
+        ];
+        const bursts = 2 + Math.floor(Math.random() * 2);
+        for (let b = 0; b < bursts; b++) {
+            const ox = canvasWidth * (0.15 + Math.random() * 0.70);
+            const oy = canvasHeight * (0.08 + Math.random() * 0.35);
+            const n = 18 + Math.floor(Math.random() * 14);
+            const col = colors[Math.floor(Math.random() * colors.length)];
+            for (let i = 0; i < n; i++) {
+                const a = (i / n) * Math.PI * 2 + Math.random() * 0.2;
+                const sp = 2.5 + Math.random() * 5.5;
+                this.particles.push({
+                    x: ox,
+                    y: oy,
+                    vx: Math.cos(a) * sp,
+                    vy: Math.sin(a) * sp,
+                    gravity: 0.06 + Math.random() * 0.05,
+                    drag: 0.96,
+                    rotation: Math.random() * Math.PI * 2,
+                    rotationSpeed: (Math.random() - 0.5) * 0.3,
+                    wobble: 0,
+                    wobbleSpeed: 0,
+                    color: col,
+                    shape: "spark",
+                    width: 2 + Math.random() * 2.5,
+                    height: 2 + Math.random() * 2.5,
+                    life: 0.9 + Math.random() * 0.2,
+                    fade: 0.012 + Math.random() * 0.01,
+                    sparkle: Math.random() * Math.PI * 2,
+                });
+            }
+        }
+        if (this.particles.length > 320) {
+            this.particles = this.particles.slice(-320);
+        }
+    }
+
     draw(ctx) {
         for (const p of this.particles) {
             ctx.save();
@@ -158,11 +201,24 @@ export default class Confetti {
             ctx.translate(p.x, p.y);
             ctx.rotate(p.rotation);
 
-            if (p.shape === "glitter") {
+            if (p.shape === "spark") {
+                const tw = 0.55 + 0.45 * Math.sin(p.sparkle * 3);
+                ctx.globalAlpha = Math.max(0, p.life * tw);
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(0, 0, p.width / 2, 0, Math.PI * 2);
+                ctx.fill();
+                // Tiny cross for firework pop
+                ctx.strokeStyle = p.color;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(-p.width, 0); ctx.lineTo(p.width, 0);
+                ctx.moveTo(0, -p.width); ctx.lineTo(0, p.width);
+                ctx.stroke();
+            } else if (p.shape === "glitter") {
                 const twinkle = 0.5 + 0.5 * Math.sin(p.sparkle);
                 ctx.globalAlpha = Math.max(0, p.life * twinkle);
                 ctx.fillStyle = p.color;
-
                 ctx.shadowBlur = 0;
                 ctx.beginPath();
                 ctx.arc(0, 0, p.width / 2, 0, Math.PI * 2);

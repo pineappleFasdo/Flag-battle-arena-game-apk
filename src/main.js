@@ -151,6 +151,23 @@ overlay.appendChild(homeScreen);
 // ── Game ─────────────────────────────────────────────────────────────────────
 const game = new Game(canvas);
 
+// Champion HOME button → show home overlay
+game.onRequestHome = function () {
+    try { releaseWakeLock(); } catch (_) {}
+    homeScreen.style.display = '';
+    homeScreen.classList.remove('nr-hiding');
+};
+
+// Capture clicks for champion HOME (must run even when not PLAYING)
+canvas.addEventListener('click', function (e) {
+    try {
+        if (game.tryChampHomeClick(e.clientX, e.clientY)) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    } catch (_) {}
+}, true);
+
 // ── Flag preloading ───────────────────────────────────────────────────────────
 // Kick off loading all flags in the background immediately.
 // Event cards are disabled with a visual indicator until ready.

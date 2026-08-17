@@ -8,15 +8,15 @@ export const BGM = {
         file:   'Chariots-of-War.mp3',
         volume: 0.3,
     },
-    // Last Flag Standing / elimination (final mode)
+    // Last Flag Standing / elimination (final mode) — stops when champion crowns
     elimination: {
-        file:   'killing-time.mp3',
-        volume: 0.18,
+        file:   'Refresher-Dyalla.mp3',
+        volume: 0.22,
     },
-    // Champion / winner screen
+    // 5H championship page — low looping BGM
     champion: {
-        file:   'there-it-is.mp3',
-        volume: 0.12,  // light background on winner screens
+        file:   'Free-Beats.mp3',
+        volume: 0.10,
     },
 };
 

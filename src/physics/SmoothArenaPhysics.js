@@ -64,8 +64,8 @@ export default class SmoothArenaPhysics {
         this._tick = 0;
 
         // Motion constants (tuned for lively but readable play)
-        this._minSpeed     = 2.2;
-        this._maxSpeed     = 11;
+        this._minSpeed     = 1.6;
+        this._maxSpeed     = 10;
         this._wallBounce   = 1.25;
         this._airDrag      = 0.012;
 
@@ -212,6 +212,8 @@ export default class SmoothArenaPhysics {
     /**
      * Keep energy high, spread the pack, bias near-rim flags toward the gap.
      * Does not apply spin.
+     * When event gravity is active (e.g. Low Gravity), softens min-speed / kicks
+     * so the gravity effect remains visible.
      */
     _stirFlags() {
         const flags = this._flagsRef;
@@ -225,6 +227,13 @@ export default class SmoothArenaPhysics {
             ((this.gapStart + this.gapSize / 2) / this.segmentCount) * Math.PI * 2;
         const gapHalf =
             (this.gapSize / this.segmentCount) * Math.PI;
+
+        // Detect active event gravity (Low Gravity / Reverse Gravity etc.)
+        const gy = this.world?.gravity?.y ?? 0;
+        const gx = this.world?.gravity?.x ?? 0;
+        const hasEventGravity = Math.abs(gy) > 0.0005 || Math.abs(gx) > 0.0005;
+        const minSpd = hasEventGravity ? 0.6 : this._minSpeed;
+        const maxSpd = hasEventGravity ? 7.5 : this._maxSpeed;
 
         const offset = this._tick & 1;
 
@@ -269,11 +278,10 @@ export default class SmoothArenaPhysics {
             let vy = body.velocity.y;
             let spd = Math.hypot(vx, vy);
 
-            // ── 1) Keep minimum linear speed (straight-line travel) ───────
-            if (spd < this._minSpeed) {
-                // Reuse current heading if any; otherwise pick a random straight direction
+            // ── 1) Keep minimum linear speed (gentler under event gravity)
+            if (spd < minSpd) {
                 const heading = spd > 0.12 ? Math.atan2(vy, vx) : Math.random() * Math.PI * 2;
-                const boost = this._minSpeed + Math.random() * 1.2;
+                const boost = minSpd + Math.random() * (hasEventGravity ? 0.4 : 1.2);
                 vx = Math.cos(heading) * boost;
                 vy = Math.sin(heading) * boost;
                 Matter.Body.setVelocity(body, { x: vx, y: vy });
@@ -281,13 +289,12 @@ export default class SmoothArenaPhysics {
             }
 
             // ── 3) Near gap sector on the rim: push STRAIGHT outward through gap
-            //     (no tangential/swirl — pure radial exit)
             if (dist > R * 0.68) {
                 let dAng = ang - gapCenter;
                 while (dAng > Math.PI) dAng -= Math.PI * 2;
                 while (dAng < -Math.PI) dAng += Math.PI * 2;
                 if (Math.abs(dAng) < gapHalf * 1.2) {
-                    const out = 0.00022;
+                    const out = hasEventGravity ? 0.00012 : 0.00022;
                     Matter.Body.applyForce(body, body.position, {
                         x: (dx / dist) * out,
                         y: (dy / dist) * out,
@@ -295,18 +302,19 @@ export default class SmoothArenaPhysics {
                 }
             }
 
-            // ── 4) Cap max speed (keep velocity direction — straight paths)
+            // ── 4) Cap max speed
             vx = body.velocity.x;
             vy = body.velocity.y;
             spd = Math.hypot(vx, vy);
-            if (spd > this._maxSpeed) {
-                const s = this._maxSpeed / spd;
+            if (spd > maxSpd) {
+                const s = maxSpd / spd;
                 Matter.Body.setVelocity(body, { x: vx * s, y: vy * s });
             }
 
-            // Occasional straight-line micro-kick (random direction, no curve)
-            if ((this._tick + i) % 100 === 0) {
-                const kick = 0.7 + Math.random() * 1.1;
+            // Micro-kicks: rarer / weaker when gravity is active so float remains visible
+            const kickMod = hasEventGravity ? 220 : 100;
+            if ((this._tick + i) % kickMod === 0) {
+                const kick = hasEventGravity ? (0.25 + Math.random() * 0.4) : (0.7 + Math.random() * 1.1);
                 const a = Math.random() * Math.PI * 2;
                 Matter.Body.setVelocity(body, {
                     x: body.velocity.x + Math.cos(a) * kick,
@@ -350,9 +358,9 @@ export default class SmoothArenaPhysics {
 
             try { Matter.Sleeping.set(body, false); } catch (_) {}
 
-            // Horizontal + energetic launch — collide immediately
+            // Softer launch so opening collisions are visible (was 4–7)
             const a = Math.random() * Math.PI * 2;
-            const s = 4.0 + Math.random() * 3.0;
+            const s = 1.8 + Math.random() * 1.6;
             Matter.Body.setVelocity(body, {
                 x: Math.cos(a) * s,
                 y: Math.sin(a) * s,

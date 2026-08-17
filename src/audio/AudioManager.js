@@ -297,6 +297,41 @@ export default class AudioManager {
         this._tone(2400, t + 0.08, 0.12, 0.05, 'triangle', 0.08);
     }
 
+    /** Firecracker pop for 5H champion screen (soft, not harsh). */
+    playFirework() {
+        const ctx = this._resume();
+        if (!ctx) return;
+        const t = ctx.currentTime;
+        // Crack body
+        this._noise(t, 0.06, 0.35, 3500);
+        this._noise(t + 0.02, 0.10, 0.18, 1800);
+        // Bright sparkle trail
+        this._tone(900 + Math.random() * 400, t, 0.12, 0.12, 'sine', 0.08);
+        this._tone(1600 + Math.random() * 600, t + 0.03, 0.15, 0.08, 'triangle', 0.10);
+        this._tone(400, t, 0.18, 0.15, 'sine', 0.12);
+    }
+
+    /** Cheer / yay whoop for 5H champion (loops via tick). */
+    playYay() {
+        const ctx = this._resume();
+        if (!ctx) return;
+        const t = ctx.currentTime;
+        // Crowd yay texture
+        this._noise(t, 0.25, 0.16, 2200);
+        this._noise(t + 0.05, 0.30, 0.12, 1600);
+        // Rising whoop
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(280, t);
+        osc.frequency.exponentialRampToValueAtTime(520, t + 0.22);
+        g.gain.setValueAtTime(0.12, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+        osc.connect(g); g.connect(this._masterGain);
+        osc.start(t); osc.stop(t + 0.28);
+        this._tone(360, t + 0.05, 0.18, 0.10, 'triangle', 0.08);
+    }
+
     /**
      * Swoosh sound — played once when an asteroid shower begins entering the arena.
      * Deep whooshing noise with a descending pitch sweep: sounds like something
@@ -355,63 +390,40 @@ export default class AudioManager {
     }
 
     /**
-     * Impact sound — played when an asteroid hits and burns a flag.
-     * Sharp crack + bass thud + high-end sizzle: sounds like a meteor strike.
+     * Impact sound — clear low thud (soothing, clearly audible).
      */
     playAsteroidHit() {
         const ctx = this._resume();
         if (!ctx) return;
         const t = ctx.currentTime;
 
-        // ── Layer 1: Explosive transient crack — ultra-short high-freq burst ──
-        // Simulates the sharp initial shockwave of a meteor strike
-        this._noise(t,        0.04, 0.65, 10000);  // sharp crack at t=0
-        this._noise(t + 0.01, 0.07, 0.50, 6500);   // secondary crack
-        this._noise(t + 0.02, 0.10, 0.38, 4200);   // crack body
-
-        // ── Layer 2: Thunderous low BOOM — rapid pitch drop sine (cannon thud) ──
+        // Main low thud — louder
         const osc1 = ctx.createOscillator();
         const g1   = ctx.createGain();
         osc1.type  = 'sine';
-        osc1.frequency.setValueAtTime(260, t);
-        osc1.frequency.exponentialRampToValueAtTime(28, t + 0.45);
-        g1.gain.setValueAtTime(0.75, t);
+        osc1.frequency.setValueAtTime(150, t);
+        osc1.frequency.exponentialRampToValueAtTime(30, t + 0.45);
+        g1.gain.setValueAtTime(0.85, t);
         g1.gain.exponentialRampToValueAtTime(0.001, t + 0.48);
         osc1.connect(g1); g1.connect(this._masterGain);
         osc1.start(t); osc1.stop(t + 0.48);
 
-        // ── Layer 3: Sub bass thud — felt as much as heard ──
+        // Sub body
         const osc2 = ctx.createOscillator();
         const g2   = ctx.createGain();
         osc2.type  = 'triangle';
-        osc2.frequency.setValueAtTime(80, t);
-        osc2.frequency.exponentialRampToValueAtTime(15, t + 0.35);
-        g2.gain.setValueAtTime(0.60, t);
-        g2.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+        osc2.frequency.setValueAtTime(70, t);
+        osc2.frequency.exponentialRampToValueAtTime(18, t + 0.38);
+        g2.gain.setValueAtTime(0.65, t);
+        g2.gain.exponentialRampToValueAtTime(0.001, t + 0.40);
         osc2.connect(g2); g2.connect(this._masterGain);
-        osc2.start(t); osc2.stop(t + 0.38);
+        osc2.start(t); osc2.stop(t + 0.40);
 
-        // ── Layer 4: Fiery explosion debris — mid-freq sizzle tail ──
-        this._noise(t + 0.03, 0.28, 0.30, 3000);   // sizzle / fire crackle
-        this._noise(t + 0.08, 0.40, 0.22, 1800);   // low rolling fire sound
-        this._noise(t + 0.18, 0.55, 0.14, 1000);   // deep rumbling debris
-
-        // ── Layer 5: Bright metallic ping + harmonic ring (real impact ring) ──
-        this._tone(520, t + 0.01, 0.15, 0.10, 'sine',     0.18);
-        this._tone(260, t + 0.02, 0.20, 0.08, 'sine',     0.14);
-        this._tone(130, t + 0.03, 0.28, 0.06, 'triangle', 0.20);
-
-        // ── Layer 6: Sawtooth distorted punch — adds grit and energy ──
-        const osc3 = ctx.createOscillator();
-        const g3   = ctx.createGain();
-        osc3.type  = 'sawtooth';
-        osc3.frequency.setValueAtTime(200, t);
-        osc3.frequency.exponentialRampToValueAtTime(40, t + 0.20);
-        g3.gain.setValueAtTime(0, t);
-        g3.gain.linearRampToValueAtTime(0.22, t + 0.01);
-        g3.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
-        osc3.connect(g3); g3.connect(this._masterGain);
-        osc3.start(t); osc3.stop(t + 0.22);
+        // Soft mid pad (no sharp crack)
+        this._noise(t, 0.12, 0.28, 1400);
+        this._noise(t + 0.02, 0.18, 0.18, 800);
+        this._tone(100, t, 0.28, 0.22, 'sine', 0.18);
+        this._tone(55, t + 0.01, 0.30, 0.18, 'triangle', 0.22);
     }
 
     playMilestone(remaining, total) {

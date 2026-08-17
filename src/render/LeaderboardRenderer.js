@@ -30,6 +30,48 @@ export default class LeaderboardRenderer {
 
         // Subtle panel pulse animation
         this._pulsePhase = 0;
+        this._themeId = 'classic';
+    }
+
+    setTheme(theme) {
+        this._themeId = theme?.id || 'classic';
+    }
+
+    _palette() {
+        if (this._themeId === 'space') {
+            return {
+                border: 'rgba(160, 120, 255, 0.55)',
+                panel0: '#0A0618',
+                panel1: '#120A28',
+                panel2: '#060312',
+                header0: '#1A1040',
+                header1: '#241858',
+                header2: '#140E30',
+                accentA: 'rgba(160,120,255,0.85)',
+                accentB: 'rgba(100,200,255,0.85)',
+                accentSoft: 'rgba(160,120,255,0.25)',
+                textAccent: '#B8A0FF',
+                rankBg: 'rgba(160,120,255,0.12)',
+                rankText: '#9B8AD8',
+                rankBorder: 'rgba(160,120,255,0.28)',
+            };
+        }
+        return {
+            border: 'rgba(61, 124, 255, 0.55)',
+            panel0: '#0D1929',
+            panel1: '#101D38',
+            panel2: '#080F1E',
+            header0: '#1A3060',
+            header1: '#1E3D78',
+            header2: '#142548',
+            accentA: 'rgba(61,124,255,0.8)',
+            accentB: 'rgba(56,213,255,0.8)',
+            accentSoft: 'rgba(61,124,255,0.25)',
+            textAccent: '#38D5FF',
+            rankBg: 'rgba(61,124,255,0.10)',
+            rankText: '#6A88B8',
+            rankBorder: 'rgba(61,124,255,0.20)',
+        };
     }
 
     reset() {
@@ -133,22 +175,23 @@ export default class LeaderboardRenderer {
         const winsW  = Math.round(w * 0.28);
 
         ctx.save();
+        const pal = this._palette();
 
         // ── Outer glow (subtle pulse) ─────────────────────────────────────────
         const pulse = 0.5 + 0.5 * Math.sin(this._pulsePhase * Math.PI * 2);
 
         ctx.shadowBlur = 0;
         this._rrect(ctx, x - 1, y - 1, w + 2, totalH + 2, radius + 1);
-        ctx.strokeStyle = `rgba(61, 124, 255, ${0.55 + 0.15 * pulse})`;
+        ctx.strokeStyle = pal.border.replace(/[\d.]+\)$/, `${0.55 + 0.15 * pulse})`);
         ctx.lineWidth   = 1.5;
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        // ── Panel body — deep navy with subtle gradient ───────────────────────
+        // ── Panel body ───────────────────────────────────────────────────────
         const panelGrad = ctx.createLinearGradient(x, y, x, y + totalH);
-        panelGrad.addColorStop(0,   '#0D1929');
-        panelGrad.addColorStop(0.15, '#101D38');
-        panelGrad.addColorStop(1,   '#080F1E');
+        panelGrad.addColorStop(0,   pal.panel0);
+        panelGrad.addColorStop(0.15, pal.panel1);
+        panelGrad.addColorStop(1,   pal.panel2);
         ctx.fillStyle = panelGrad;
         this._rrect(ctx, x, y, w, totalH, radius);
         ctx.fill();
@@ -165,19 +208,19 @@ export default class LeaderboardRenderer {
 
         // ── Header ────────────────────────────────────────────────────────────
         const hg = ctx.createLinearGradient(x, y, x + w, y + headerH);
-        hg.addColorStop(0,   '#1A3060');
-        hg.addColorStop(0.5, '#1E3D78');
-        hg.addColorStop(1,   '#142548');
+        hg.addColorStop(0,   pal.header0);
+        hg.addColorStop(0.5, pal.header1);
+        hg.addColorStop(1,   pal.header2);
         ctx.fillStyle = hg;
         this._rrect(ctx, x, y, w, headerH, [radius, radius, 0, 0]);
         ctx.fill();
 
         // Header accent line at bottom
         const accentGrad = ctx.createLinearGradient(x, 0, x + w, 0);
-        accentGrad.addColorStop(0,    'rgba(61,124,255,0)');
-        accentGrad.addColorStop(0.3,  'rgba(61,124,255,0.8)');
-        accentGrad.addColorStop(0.7,  'rgba(56,213,255,0.8)');
-        accentGrad.addColorStop(1,    'rgba(61,124,255,0)');
+        accentGrad.addColorStop(0,    'rgba(0,0,0,0)');
+        accentGrad.addColorStop(0.3,  pal.accentA);
+        accentGrad.addColorStop(0.7,  pal.accentB);
+        accentGrad.addColorStop(1,    'rgba(0,0,0,0)');
         ctx.strokeStyle = accentGrad;
         ctx.lineWidth   = 1.5;
         ctx.beginPath();
@@ -261,7 +304,8 @@ export default class LeaderboardRenderer {
         }
 
         // ── Final outer border stroke ─────────────────────────────────────────
-        ctx.strokeStyle = `rgba(61,124,255,${0.35 + 0.15 * pulse})`;
+        const palBorder = this._palette();
+        ctx.strokeStyle = palBorder.border.replace(/[\d.]+\)$/, `${0.35 + 0.15 * pulse})`);
         ctx.lineWidth   = 1;
         this._rrect(ctx, x, y, w, totalH, radius);
         ctx.stroke();
@@ -337,9 +381,10 @@ export default class LeaderboardRenderer {
             badgeTextColor = '#CD9B6E';
             badgeBorder    = 'rgba(205,127,50,0.40)';
         } else {
-            badgeBg        = 'rgba(61,124,255,0.10)';
-            badgeTextColor = '#6A88B8';
-            badgeBorder    = 'rgba(61,124,255,0.20)';
+            const rp = this._palette();
+            badgeBg        = rp.rankBg;
+            badgeTextColor = rp.rankText;
+            badgeBorder    = rp.rankBorder;
         }
 
         ctx.fillStyle = badgeBg;

@@ -14,13 +14,20 @@ export default class ArenaRenderer {
         ctx.rotate(arena.angle);
 
         const gapAngle = (arena.gapSize / arena.segmentCount) * Math.PI * 2;
+        const ringOuter = theme?.ringOuter ?? "rgba(160, 140, 255, 0.35)";
 
-        // Single crisp ring stroke — no glow / blur layer
+        // Clean pro ring: thin outer edge + solid core (no soft glow mush)
         ctx.shadowBlur = 0;
         ctx.shadowColor = "transparent";
-        ctx.strokeStyle = ring;
-        ctx.lineWidth   = 3.5;
         ctx.lineCap     = "butt";
+        ctx.globalAlpha = 1;
+
+        ctx.strokeStyle = ringOuter;
+        ctx.lineWidth   = 5;
+        this._strokeRing(ctx, arena, gapAngle);
+
+        ctx.strokeStyle = ring;
+        ctx.lineWidth   = 2.5;
         this._strokeRing(ctx, arena, gapAngle);
 
         ctx.restore();
