@@ -375,35 +375,13 @@ export default class Game {
         // Classic: short pause + celebration sting is fine.
         const keepBattleBgm = this.isLongBattleMode || this.isHighestWinsMode;
 
-        if (isTie && !winner.isSilent) {
-            this.confetti.start(this._lw / 2, this._lh * 0.4, 130);
-            try { this.audio.stopWinnerLoop(); } catch (_) {}
-            if (!keepBattleBgm) {
-                try { this.audio.stopBGM(); } catch (_) {}
-                try { this.audio.startCelebrationLoop(1800); } catch (_) {}
-            }
-            const names = (winner.countries ?? []).map(c => c.name).join(" and ");
-            if (names) this.audio.speak(`It's a tie between ${names}!`);
-        } else if (!isTie) {
-            this.confetti.start(this._lw / 2, this._lh * 0.36, 150);
-            try { this.audio.stopWinnerLoop(); } catch (_) {}
-            if (!keepBattleBgm) {
-                try { this.audio.stopBGM(); } catch (_) {}
-                try { this.audio.startCelebrationLoop(1800); } catch (_) {}
-            }
-            this.audio.speak(`${winner.country.name} wins!`);
-
-            // Classic only: remove winner from pool so they sit out until recycle
-            // Highest-Wins mode keeps everyone eligible (accumulate wins)
-            if (!this.isHighestWinsMode && !this.isLongBattleMode) {
-                this._removeWinnerFromPool(winner.country.code);
-            }
-        }
-
         // ── Sudden death tiebreaker resolution ───────────────────────────
+        // Handle this BEFORE generic audio so the dedicated SD screen owns the audio.
         if (this._hwSuddenDeathActive) {
             if (isTie) {
                 // Tied again — replay sudden death with the same countries
+                this.confetti.start(this._lw / 2, this._lh * 0.4, 130);
+                try { this.audio.stopWinnerLoop(); } catch (_) {}
                 const names = (winner.countries ?? []).map(c => c.name).join(" and ");
                 if (names) this.audio.speak(`${names} still tied — replaying sudden death!`);
                 this._winnerTimerEndsAt = Date.now() + this.winnerDisplayDuration;
@@ -439,6 +417,7 @@ export default class Game {
                     this.winnerManager.clearWins();
                     this.leaderboardRenderer?.reset();
                     // Full-screen TIME UP for the sudden-death winner, then next round
+                    // (_showHighestWinsRoundWinner owns all audio — no speak here)
                     this._showHighestWinsRoundWinner();
                 } else {
                     // Fallback (should not hit in continuous HW)
@@ -468,6 +447,10 @@ export default class Game {
         }
 
         // ── Mode-specific session end ─────────────────────────────────────
+        // Check mode result FIRST so we know whether the generic "wins!" speak
+        // should fire — dedicated screens (_showHighestWinsRoundWinner, _enterFinalMode,
+        // _showLongBattleSegmentWinner) all own their own audio and must not be
+        // preceded by a second overlapping TTS call.
         if (this.isHighestWinsMode) {
             const result = this.sessionMode.onRoundComplete(winner);
             if (result === "sudden_death") {
@@ -480,17 +463,15 @@ export default class Game {
                 return;
             }
             if (result === "segment_end") {
-                // Clear winner — full-screen TIME UP, then next 40-min round
+                // Clear winner — full-screen TIME UP owns all audio; no generic speak.
                 this._showHighestWinsRoundWinner();
                 return;
             }
-            // Still time left — fall through to continue arena rounds
+            // Still time left — fire generic in-round audio below
+
         } else if (this.isLongBattleMode) {
             const result = this.sessionMode.onRoundComplete(winner);
             if (result === "grand_final") {
-                // Show the last round's winner screen for 6 s before the red
-                // Final Elimination Round cinematic — gives viewers a clear
-                // look at who won the final qualifying round.
                 this._showLongBattleFinalSegmentWinner();
                 return;
             }
@@ -502,11 +483,46 @@ export default class Game {
                 this._endHighestWinsSession();
                 return;
             }
+            // Still time left — fire generic in-round audio below
+
         } else if (this.sessionStartTime > 0) {
             // Classic: 40 minutes up → Last Standing Final Mode
+            // _enterFinalMode owns its own audio — skip generic "wins!" speak.
             const elapsed = Date.now() - this.sessionStartTime;
             if (elapsed >= this.QUALIFY_DURATION_MS) {
                 this._enterFinalMode();
+                // _enterFinalMode owns audio; set a brief display then continue
+                const displayDuration = this.winnerDisplayDuration;
+                this._winnerTimerEndsAt = Date.now() + displayDuration;
+                this.restartTimer = setTimeout(() => { this._winnerTimerEndsAt = null; this._beginNextEvent(); }, displayDuration);
+                return;
+            }
+        }
+
+        // ── Generic in-round winner audio (only reached when NOT transitioning
+        //    to a dedicated champion / segment-end screen above) ─────────────
+        if (isTie && !winner.isSilent) {
+            this.confetti.start(this._lw / 2, this._lh * 0.4, 130);
+            try { this.audio.stopWinnerLoop(); } catch (_) {}
+            if (!keepBattleBgm) {
+                try { this.audio.stopBGM(); } catch (_) {}
+                try { this.audio.startCelebrationLoop(1800); } catch (_) {}
+            }
+            const names = (winner.countries ?? []).map(c => c.name).join(" and ");
+            if (names) this.audio.speak(`It's a tie between ${names}!`);
+        } else if (!isTie) {
+            this.confetti.start(this._lw / 2, this._lh * 0.36, 150);
+            try { this.audio.stopWinnerLoop(); } catch (_) {}
+            if (!keepBattleBgm) {
+                try { this.audio.stopBGM(); } catch (_) {}
+                try { this.audio.startCelebrationLoop(1800); } catch (_) {}
+            }
+            this.audio.speak(`${winner.country.name} wins!`);
+
+            // Classic only: remove winner from pool so they sit out until recycle
+            // Highest-Wins mode keeps everyone eligible (accumulate wins)
+            if (!this.isHighestWinsMode && !this.isLongBattleMode) {
+                this._removeWinnerFromPool(winner.country.code);
             }
         }
 
@@ -578,12 +594,22 @@ export default class Game {
         this.gameState = "GRAND_CHAMPION";
 
         // Continuous confetti + celebration SFX (not free-beats — that is 5H final only)
-        this.confetti.start(this._lw / 2, this._lh * 0.08, 220, { fromTop: true });
+        // Fire a dense initial burst from multiple points across the top for a big entrance
+        this.confetti.start(this._lw * 0.25, 0, 180, { fromTop: true });
+        this.confetti.start(this._lw * 0.50, 0, 220, { fromTop: true });
+        this.confetti.start(this._lw * 0.75, 0, 180, { fromTop: true });
+
+        // Stop any previous audio cleanly, then start the winner celebration loop.
+        // The loop runs indefinitely (no auto-stop) — it will be stopped only when
+        // the countdown reaches 0 and the next round begins.
         try { this.audio.stopBGM(); } catch (_) {}
         try { this.audio.stopWinnerLoop(); } catch (_) {}
+        // Use 1800ms fade-in delay (same as qualifier) so the fanfare eases in
+        // instead of blasting instantly. Clap/confetti SFX are deferred so they
+        // don't stack on top of the loop start.
         try { this.audio.startCelebrationLoop(1800); } catch (_) {}
-        try { this.audio.playClap(); } catch (_) {}
-        try { this.audio.playConfetti(); } catch (_) {}
+        setTimeout(() => { try { this.audio.playClap();     } catch (_) {} }, 2000);
+        setTimeout(() => { try { this.audio.playConfetti(); } catch (_) {} }, 3500);
         try {
             const nm = this._grandChampion?.name || "Champion";
             const wins = this._grandChampion?.wins || 1;
@@ -592,6 +618,13 @@ export default class Game {
             );
         } catch (_) {}
 
+        // Track when the next clap/confetti SFX should fire so the update
+        // loop can re-trigger them at a steady cadence throughout the hold.
+        // Start cadence after the deferred first shots (2s clap, 3.5s confetti)
+        // so the loop-triggered repeats don't overlap the initial ones.
+        this._hwWinnerClapNextAt    = Date.now() + 6500;
+        this._hwWinnerConfettiNextAt = Date.now() + 10500;
+
         // Tick countdown label; after hold → next 40-min round (resume Chariots)
         this._champCountdownTimer = setInterval(() => {
             this._champCountdownRemain--;
@@ -599,9 +632,12 @@ export default class Game {
                 clearInterval(this._champCountdownTimer);
                 this._champCountdownTimer = null;
                 this._champHwRound = false;
+                // Stop winner audio now that we're transitioning to the next round
                 try { this.audio.stopWinnerLoop(); } catch (_) {}
                 try { this.audio.playPhase('qualify'); } catch (_) {}
                 this._grandChampion = null;
+                this._hwWinnerClapNextAt    = 0;
+                this._hwWinnerConfettiNextAt = 0;
                 this.gameState = "NEXT_EVENT";
                 this._beginNextEvent();
             }
@@ -1662,16 +1698,41 @@ export default class Game {
             this.confetti.update();
             this._champConfettiTick = (this._champConfettiTick || 0) + 1;
 
-            // Highest Wins 40-min ROUND winner: continuous confetti + celebration SFX
+            // Highest Wins 40-min ROUND winner: continuous confetti + looping winner audio
             if (this._champHwRound) {
-                if (this._champConfettiTick % 24 === 0) {
-                    this.confetti.rain(this._lw, 8, { alphaScale: 0.75 });
+                // Dense, uninterrupted confetti rain from multiple top positions —
+                // fires every 12 ticks (~5× per second at 60fps) for a wall-to-wall effect
+                if (this._champConfettiTick % 12 === 0) {
+                    // Alternate left/center/right sources so coverage is even
+                    const xPos = [0.2, 0.5, 0.8][Math.floor(this._champConfettiTick / 12) % 3];
+                    this.confetti.rain(this._lw, 12, { alphaScale: 0.88, fromTop: true, xFrac: xPos });
                 }
-                if (this._champConfettiTick % 90 === 0) {
+                // Burst fireworks occasionally for extra visual punch
+                if (this._champConfettiTick % 72 === 0) {
+                    try { this.confetti.burstFireworks?.(this._lw, this._lh); } catch (_) {}
+                }
+
+                // Re-fire clap/confetti SFX on a time-based cadence so they keep
+                // playing throughout the full countdown (audio loop runs continuously
+                // via startCelebrationLoop; these are supplementary one-shot sounds)
+                const nowMs = Date.now();
+                if (this._hwWinnerClapNextAt && nowMs >= this._hwWinnerClapNextAt) {
                     try { this.audio.playClap(); } catch (_) {}
+                    this._hwWinnerClapNextAt = nowMs + 4500; // clap roughly every 4.5s
                 }
-                if (this._champConfettiTick % 120 === 0) {
+                if (this._hwWinnerConfettiNextAt && nowMs >= this._hwWinnerConfettiNextAt) {
                     try { this.audio.playConfetti(); } catch (_) {}
+                    this._hwWinnerConfettiNextAt = nowMs + 7000; // confetti SFX every 7s
+                }
+
+                // Safety net: if the celebration loop somehow stopped, restart it
+                if (this._champConfettiTick % 300 === 0) {
+                    try {
+                        if (typeof this.audio.isCelebrationLoopPlaying === "function"
+                            && !this.audio.isCelebrationLoopPlaying()) {
+                            this.audio.startCelebrationLoop(1800);
+                        }
+                    } catch (_) {}
                 }
                 return;
             }
@@ -1687,17 +1748,17 @@ export default class Game {
                 return;
             }
 
-            // Non-permanent: short celebration then settle
-            if (!this._champBgmKilled) {
-                this._champBgmKilled = true;
-                try { this.audio.stopBGM(); } catch (_) {}
+            // Classic qualifier (40-min): continuous confetti + looping champion BGM
+            // until the countdown expires. _champBgmKilled guard removed so the
+            // champion audio keeps running the full hold duration.
+            if (this._champConfettiTick % 22 === 0) {
+                this.confetti.rain(this._lw, 7, { alphaScale: 0.80, fromTop: true });
             }
-            if (this._champConfettiTick < 480 && this._champConfettiTick % 36 === 0) {
-                this.confetti.rain(this._lw, 6, { alphaScale: 0.5 });
+            if (this._champConfettiTick % 55 === 0) {
+                try { this.audio.playClap(); } catch (_) {}
             }
-            if (this._champConfettiTick < 180) {
-                if (this._champConfettiTick === 90) this.audio.playConfetti();
-                if (this._champConfettiTick === 150) this.audio.playClap();
+            if (this._champConfettiTick % 90 === 0) {
+                try { this.audio.playConfetti(); } catch (_) {}
             }
             return;
         }
@@ -3965,30 +4026,48 @@ export default class Game {
         const pulse = 0.5 + 0.5 * Math.sin(t * 1.1);
         const name = (this._grandChampion?.name ?? "").toUpperCase();
 
-        // Midnight navy full background
-        ctx.fillStyle = "#050816";
+        // ── Theme-aware palette ─────────────────────────────────────────────
+        const ui        = themeUI(this.theme);
+        const isSpace   = this.theme?.id === 'space';
+        // Background: theme deep panel colour
+        const bgBase    = ui.panelDeep;
+        // Radial mid-glow: derived from theme glow rgb
+        const glowRgb   = ui.glow;                          // e.g. '160, 120, 255'
+        // Ray colour: theme accent rays
+        const rayCol1   = ui.ray1;                          // e.g. 'rgba(160,120,255,1)'
+        const rayCol2   = ui.ray2;
+        // Ring stroke
+        const ringStroke = ui.border;
+        // Title / win text
+        const goldCol   = isSpace ? '#C8A0FF' : '#FFC83D';  // lavender-gold in space
+        // Card bg
+        const cardBg    = ui.panel;
+        // Countdown muted text
+        const mutedCol  = ui.muted;
+
+        // Full background
+        ctx.fillStyle = bgBase;
         ctx.fillRect(0, 0, cw, ch);
 
         // Soft radial glow behind the arena
         const bgGrad = ctx.createRadialGradient(ax, ay, R * 0.15, ax, ay, R * 1.35);
-        bgGrad.addColorStop(0, "rgba(32, 59, 104, 0.55)");
-        bgGrad.addColorStop(0.55, "rgba(10, 18, 38, 0.9)");
-        bgGrad.addColorStop(1, "rgba(5, 8, 22, 1)");
+        bgGrad.addColorStop(0,    `rgba(${glowRgb}, 0.28)`);
+        bgGrad.addColorStop(0.55, `rgba(${glowRgb}, 0.07)`);
+        bgGrad.addColorStop(1,    `rgba(${glowRgb}, 0)`);
         ctx.fillStyle = bgGrad;
         ctx.fillRect(0, 0, cw, ch);
 
-        // Arena ring
+        // Arena ring — theme border colour
         ctx.save();
         ctx.beginPath();
         ctx.arc(ax, ay, R, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(244, 247, 255, 0.85)";
+        ctx.strokeStyle = ringStroke;
         ctx.lineWidth = 3;
-
         ctx.shadowBlur = 0;
         ctx.stroke();
         ctx.restore();
 
-        // Gold rays inside the circle (reference: TIME UP — CHAMPION screen)
+        // Theme rays inside the circle
         ctx.save();
         ctx.beginPath();
         ctx.arc(ax, ay, R * 0.98, 0, Math.PI * 2);
@@ -3999,26 +4078,51 @@ export default class Game {
         for (let i = 0; i < 18; i++) {
             const angle = (i / 18) * Math.PI * 2;
             const hw = i % 2 === 0 ? Math.PI / 18 * 0.85 : Math.PI / 18 * 0.35;
-            const rayAlpha = (i % 2 === 0 ? 0.22 : 0.10) + pulse * 0.06;
+            const rayAlpha = (i % 2 === 0 ? 0.28 : 0.12) + pulse * 0.06;
             ctx.beginPath();
             ctx.moveTo(Math.cos(angle - hw) * R * 0.08, Math.sin(angle - hw) * R * 0.08);
             ctx.lineTo(Math.cos(angle) * rayR, Math.sin(angle) * rayR);
             ctx.lineTo(Math.cos(angle + hw) * R * 0.08, Math.sin(angle + hw) * R * 0.08);
             ctx.closePath();
-            ctx.fillStyle = `rgba(255, 200, 61, ${rayAlpha})`;
+            ctx.fillStyle = i % 2 === 0 ? rayCol1.replace(/,[\d.]+\)$/, `,${rayAlpha})`) : rayCol2.replace(/,[\d.]+\)$/, `,${rayAlpha})`);
             ctx.fill();
         }
+
+        // Space theme: emanating concentric rings (matches WinnerRenderer space look)
+        if (isSpace) {
+            const ringCount = 4;
+            for (let r = 0; r < ringCount; r++) {
+                const phase  = ((t * 0.5 + r / ringCount) % 1);
+                const radius = R * 0.10 + R * 0.85 * phase;
+                const alpha  = (1 - phase) * 0.32;
+                ctx.beginPath();
+                ctx.arc(0, 0, radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(${glowRgb},${alpha})`;
+                ctx.lineWidth   = Math.max(0.5, (1 - phase) * 3.0);
+                ctx.stroke();
+            }
+        }
         ctx.restore();
+
+        // Central glow behind flag position (space: purple, classic: blue-gold)
+        const glowGr = ctx.createRadialGradient(ax, ay, 0, ax, ay, R * 0.40);
+        glowGr.addColorStop(0,   `rgba(${glowRgb}, ${0.45 + pulse * 0.12})`);
+        glowGr.addColorStop(0.5, `rgba(${glowRgb}, 0.18)`);
+        glowGr.addColorStop(1,   `rgba(${glowRgb}, 0)`);
+        ctx.fillStyle = glowGr;
+        ctx.beginPath();
+        ctx.arc(ax, ay, R * 0.40, 0, Math.PI * 2);
+        ctx.fill();
 
         // TOP 1 badge above the ring
         ctx.save();
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-
         ctx.shadowBlur = 0;
         const topSize = Math.min(R * 0.085, 17);
         ctx.font = gf(800, topSize);
-        ctx.fillStyle = "#FFC83D";
+        // Badge above ring: cyan-white accent (distinct from gold title below)
+        ctx.fillStyle = isSpace ? '#C8A0FF' : '#38D5FF';
         if (this._champHwRound) {
             ctx.fillText(`HIGHEST WINNER WINS  ·  ${name || "CHAMPION"}`, ax, ay - R - topSize * 2.2);
         } else {
@@ -4051,17 +4155,16 @@ export default class Game {
 
         let y = ay - stackH / 2;
 
-        // Trophy emoji
+        // Trophy emoji — warm gold
         ctx.font = gf(900, trophySize);
-        ctx.fillStyle = "#FFC83D";
-
+        ctx.fillStyle = goldCol;
         ctx.shadowBlur = 0;
         ctx.fillText("🏆", ax, y);
         y += trophySize + gap * 0.5;
 
-        // Title: 5H Grand Final vs generic Time-Up champion
+        // Title: bright white with slight warmth (clearly different from gold emoji/wins)
         ctx.font = gf(900, titleSize);
-        ctx.fillStyle = "#FFC83D";
+        ctx.fillStyle = isSpace ? '#E8D8FF' : '#FFFFFF';
         ctx.shadowBlur = 0;
         let champTitle = "TIME UP  —  CHAMPION";
         if (this._champHwRound) {
@@ -4078,7 +4181,7 @@ export default class Game {
         const pad = Math.max(4, flagW * 0.04);
 
         ctx.shadowBlur = 0;
-        ctx.fillStyle = "#101D38";
+        ctx.fillStyle = cardBg;
         ctx.beginPath();
         if (typeof ctx.roundRect === "function") {
             ctx.roundRect(flagX - pad, flagY - pad, flagW + pad * 2, flagH + pad * 2, 8);
@@ -4086,7 +4189,7 @@ export default class Game {
             ctx.rect(flagX - pad, flagY - pad, flagW + pad * 2, flagH + pad * 2);
         }
         ctx.fill();
-        ctx.strokeStyle = `rgba(255, 200, 61, ${0.55 + pulse * 0.25})`;
+        ctx.strokeStyle = `rgba(${glowRgb}, ${0.55 + pulse * 0.25})`;
         ctx.lineWidth = 2;
         ctx.stroke();
 
@@ -4108,7 +4211,7 @@ export default class Game {
         }
         y += flagH + gap;
 
-        // Country name — clearly below the flag
+        // Country name — bright white (most prominent text after title)
         ctx.font = gf(800, nameSize);
         ctx.fillStyle = "#F4F7FF";
 
@@ -4120,17 +4223,17 @@ export default class Game {
         ctx.fillText(displayName, ax, y);
         y += nameSize + gap * 0.75;
 
-        // 1 WIN
+        // Win count — warm orange-gold (distinct from the pure-gold trophy/title)
         ctx.font = gf(800, winSize);
-        ctx.fillStyle = "#FFC83D";
+        ctx.fillStyle = isSpace ? '#FFB347' : '#FF9A3C';
         ctx.shadowBlur = 0;
         const winN = this._grandChampion?.wins ?? 1;
         ctx.fillText(`${winN} WIN${winN === 1 ? "" : "S"}`, ax, y);
         y += winSize + gap * 0.9;
 
-        // Countdown / permanent label
+        // Countdown / permanent label — light blue (cool contrast to warm win count above)
         ctx.font = gf(700, cdSize);
-        ctx.fillStyle = "#91A7C9";
+        ctx.fillStyle = isSpace ? '#B0A0E0' : '#38D5FF';
         ctx.shadowBlur = 0;
         if (this._champPermanent) {
             ctx.fillText("FINAL RESULT  ·  NO NEXT ROUND", ax, y);
