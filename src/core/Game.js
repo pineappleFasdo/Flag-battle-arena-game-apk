@@ -1,7 +1,6 @@
 import PhysicsWorld        from "../physics/PhysicsWorld";
 import { gf, GAME_FONT } from '../GameFont.js';
 import ArenaPhysics        from "../physics/ArenaPhysics";
-import SmoothArenaPhysics  from "../physics/SmoothArenaPhysics";
 import ArenaRenderer       from "../render/ArenaRenderer";
 import BottomTrayRenderer  from "../render/BottomTrayRenderer";
 import FinalBottomRenderer from "../render/FinalBottomRenderer";
@@ -25,7 +24,7 @@ import TrayLauncher        from "../effects/TrayLauncher";
 import HighestWinsMode     from "../modes/HighestWinsMode";
 import LongBattleMode       from "../modes/LongBattleMode";
 import Matter              from "matter-js";
-import { THEMES, DEFAULT_THEME, themeUI } from "../themes/ThemeConfig.js";
+import { THEMES, DEFAULT_THEME } from "../themes/ThemeConfig.js";
 import SpaceTheme              from "../themes/SpaceTheme.js";
 
 export default class Game {
@@ -82,7 +81,7 @@ export default class Game {
         this.gameState             = "START_SCREEN";
         this.theme                 = THEMES[DEFAULT_THEME];
         this.winnerDisplayTime     = 0;
-        this.winnerDisplayDuration = 3500; // classic short display; 5H segment uses ROUND_WINNER_DISPLAY_MS
+        this.winnerDisplayDuration = 3500;
 
         // ── Qualifying session ────────────────────────────────────────────
         this.QUALIFY_DURATION_MS = 40 * 60 * 1000;
@@ -108,7 +107,6 @@ export default class Game {
         this._champCountdownTimer  = null;
         this._champCountdownRemain = 120;
         this._champPermanent       = false;
-        this._champHwRound         = false;
         this._lbGrandFinalPending  = false;
 
         this.nextEventTimer    = 0;
@@ -150,22 +148,12 @@ export default class Game {
         this._finalStalemateSince = 0;
         this._emptyArenaSince     = 0;
 
-        // Winner screen timer — tracks when restartTimer will fire so the
-        // countdown pill in WinnerRenderer can show live seconds remaining.
-        this._winnerTimerEndsAt = null;
-        this._winnerShowTick    = 0;
-
         // ── Highest Winner Wins — sudden death tiebreaker ─────────────────
         this._hwSuddenDeathActive   = false;
         this._hwSuddenDeathFlags    = [];   // countries in the tiebreaker
         this._hwSuddenDeathWins     = 0;    // shared win count that caused the tie
         this._suddenDeathBannerStart    = 0;
         this._suddenDeathBannerDuration = 3800;
-
-        // ── 5H Grand Final cinematic state ────────────────────────────────────
-        this._gfCinematicSpoken = false; // audio fires once per entry
-        this._gfRayAngle        = 0;     // slow rotating rays
-        this._gfRingPhase       = 0;     // emanating ring phase
     }
 
     get _lw() { return this._logicalW || this.canvas.width; }
@@ -230,17 +218,40 @@ export default class Game {
 
     resize(width, height, dpr = 1) {
         this._dpr = dpr;
-        this.canvas.width  = width;
-        this.canvas.height = height;
+
+        // ── Force strict 9:16 aspect ratio ───────────────────────────────────
+        // Clamp canvas to a 9:16 box — layout, physics and arena all compute
+        // against 9:16, not the phone's native ratio (19.5:9, 20:9, etc.).
+        const TARGET_W = 9, TARGET_H = 16;
+        let gameW = width;
+        let gameH = height;
+        if (gameW / gameH > TARGET_W / TARGET_H) {
+            gameW = Math.round(gameH * TARGET_W / TARGET_H); // too wide
+        } else {
+            gameH = Math.round(gameW * TARGET_H / TARGET_W); // too tall
+        }
+
+        // Centre the CSS display box inside the full viewport
+        const offsetX = Math.round((width  / dpr - gameW / dpr) / 2);
+        const offsetY = Math.round((height / dpr - gameH / dpr) / 2);
+        this.canvas.style.position = 'absolute';
+        this.canvas.style.left     = offsetX + 'px';
+        this.canvas.style.top      = offsetY + 'px';
+        this.canvas.style.width    = (gameW / dpr) + 'px';
+        this.canvas.style.height   = (gameH / dpr) + 'px';
+
+        // Pixel buffer is the clamped 9:16 size only
+        this.canvas.width  = gameW;
+        this.canvas.height = gameH;
 
         this.ctx.setTransform(1, 0, 0, 1, 0, 0);
         this.ctx.scale(dpr, dpr);
 
-        this._logicalW = width  / dpr;
-        this._logicalH = height / dpr;
+        this._logicalW = gameW / dpr;
+        this._logicalH = gameH / dpr;
 
-        const lw = width  / dpr;
-        const lh = height / dpr;
+        const lw = gameW / dpr;
+        const lh = gameH / dpr;
         this.layout.update(lw, lh);
 
         this.physics = new PhysicsWorld(lw, lh);
@@ -300,7 +311,6 @@ export default class Game {
      * eventId matches the id defined in SELECTION_EVENTS in main.js.
      */
     startEvent(eventId, themeId = DEFAULT_THEME) {
-        try { this.audio.stopWinnerLoop(); } catch (_) {}
         this._currentEventId = eventId;
         this.theme = THEMES[themeId] ?? THEMES[DEFAULT_THEME];
 
@@ -316,15 +326,6 @@ export default class Game {
         // Tell leaderboard renderer which label to use
         this.leaderboardRenderer?.setHighestWinsMode(this.isHighestWinsMode);
         this.leaderboardRenderer?.setLongBattleMode?.(this.isLongBattleMode);
-        // Always start in round mode — elim titles only when final actually starts
-        this.leaderboardRenderer?.setFinalMode?.(false);
-        this.leaderboardRenderer?.setGrandFinal?.(false);
-        // Theme-aware UI (space purple, etc.)
-        this.leaderboardRenderer?.setTheme?.(this.theme);
-        this.bottomTrayRenderer?.setTheme?.(this.theme);
-        this.progressBarRenderer?.setTheme?.(this.theme);
-        this.winnerRender?.setTheme?.(this.theme);
-        this.finalBottomRenderer?.setTheme?.(this.theme);
 
         this._doReset();
     }
@@ -363,116 +364,81 @@ export default class Game {
 
         this.gameState         = "WINNER_SHOW";
         this.winnerDisplayTime = Date.now();
-        this._winnerShowTick   = 0;  // reset so clap/confetti audio fires fresh
 
         if (this.theme?.stars) this.spaceTheme.notifyNotPlaying();
         this.eventManager.end(this._eventCtx());
 
         const isTie = winner?.isTie === true;
 
-        // free-beats ONLY on final 5H champion page — never here.
-        // 5H / HW: keep Chariots-of-War running through in-round winners.
-        // Classic: short pause + celebration sting is fine.
-        const keepBattleBgm = this.isLongBattleMode || this.isHighestWinsMode;
+        if (isTie && !winner.isSilent) {
+            this.confetti.start(this._lw / 2, this._lh * 0.4, 130);
+            this.audio.playWinner();
+            const names = (winner.countries ?? []).map(c => c.name).join(" and ");
+            if (names) this.audio.speak(`It's a tie between ${names}!`);
+        } else if (!isTie) {
+            this.confetti.start(this._lw / 2, this._lh * 0.36, 150);
+            this.audio.playWinner();
+            this.audio.speak(`${winner.country.name} wins!`);
+
+            // Classic only: remove winner from pool so they sit out until recycle
+            // Highest-Wins mode keeps everyone eligible (accumulate wins)
+            if (!this.isHighestWinsMode && !this.isLongBattleMode) {
+                this._removeWinnerFromPool(winner.country.code);
+            }
+        }
 
         // ── Sudden death tiebreaker resolution ───────────────────────────
-        // Handle this BEFORE generic audio so the dedicated SD screen owns the audio.
         if (this._hwSuddenDeathActive) {
             if (isTie) {
                 // Tied again — replay sudden death with the same countries
-                this.confetti.start(this._lw / 2, this._lh * 0.4, 130);
-                try { this.audio.stopWinnerLoop(); } catch (_) {}
                 const names = (winner.countries ?? []).map(c => c.name).join(" and ");
                 if (names) this.audio.speak(`${names} still tied — replaying sudden death!`);
-                this._winnerTimerEndsAt = Date.now() + this.winnerDisplayDuration;
                 this.restartTimer = setTimeout(() => {
                     this.restartTimer = null;
-                    this._winnerTimerEndsAt = null;
                     this._enterHWSuddenDeath(
                         this._hwSuddenDeathFlags,
                         this._hwSuddenDeathWins
                     );
                 }, this.winnerDisplayDuration);
             } else {
-                // Single sudden death winner = ROUND winner for this 40-min window
+                // We have a single sudden death winner — crown them champion
                 const country = winner.country;
                 this._hwSuddenDeathActive = false;
-
-                // Record as segment winner, reset board for next 40-min (same as clear winner path)
-                if (this.isHighestWinsMode && this.sessionMode) {
-                    const wins = this._hwSuddenDeathWins || 1;
-                    this.sessionMode.lastSegmentWinner = {
-                        code: country.code,
-                        name: country.name,
-                        image: country.image,
-                        wins: country.wins || wins,
-                        segment: (this.sessionMode.segmentIndex || 0) + 1,
-                    };
-                    this.sessionMode.segmentIndex = (this.sessionMode.segmentIndex || 0) + 1;
-                    this.sessionMode.tiedCountries = [];
-                    this.sessionMode.sessionStartTime = Date.now();
-                    this.sessionStartTime = this.sessionMode.sessionStartTime;
-                    this.QUALIFY_DURATION_MS = this.sessionMode.constructor.DURATION_MS
-                        || (40 * 60 * 1000);
-                    this.winnerManager.clearWins();
-                    this.leaderboardRenderer?.reset();
-                    // Full-screen TIME UP for the sudden-death winner, then next round
-                    // (_showHighestWinsRoundWinner owns all audio — no speak here)
-                    this._showHighestWinsRoundWinner();
-                } else {
-                    // Fallback (should not hit in continuous HW)
-                    this._grandChampion = country;
-                    this._champDisplayStart = Date.now();
-                    this._champCountdownRemain = this._champCountdownSec;
-                    this.gameState = "GRAND_CHAMPION";
-                    this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
-                    try { this.audio.stopWinnerLoop(); } catch (_) {}
-                    try { this.audio.stopBGM(); } catch (_) {}
-                    try { this.audio.startCelebrationLoop(1800); } catch (_) {}
-                    this.audio.speak(
-                        `${country.name} wins the sudden death and is the Highest Winner Champion!`
-                    );
-                    if (this._champCountdownTimer) clearInterval(this._champCountdownTimer);
-                    this._champCountdownTimer = setInterval(() => {
-                        this._champCountdownRemain--;
-                        if (this._champCountdownRemain <= 0) {
-                            clearInterval(this._champCountdownTimer);
-                            this._champCountdownTimer = null;
-                            this._doReset();
-                        }
-                    }, 1000);
-                }
+                this._grandChampion       = country;
+                this._champDisplayStart   = Date.now();
+                this._champCountdownRemain = this._champCountdownSec;
+                this.gameState = "GRAND_CHAMPION";
+                this.audio.playPhase('champion');
+                this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
+                this.audio.playWinner();
+                this.audio.speak(
+                    `${country.name} wins the sudden death and is the Highest Winner Champion!`
+                );
+                if (this._champCountdownTimer) clearInterval(this._champCountdownTimer);
+                this._champCountdownTimer = setInterval(() => {
+                    this._champCountdownRemain--;
+                    if (this._champCountdownRemain <= 0) {
+                        clearInterval(this._champCountdownTimer);
+                        this._champCountdownTimer = null;
+                        this._doReset();
+                    }
+                }, 1000);
             }
             return;
         }
 
         // ── Mode-specific session end ─────────────────────────────────────
-        // Check mode result FIRST so we know whether the generic "wins!" speak
-        // should fire — dedicated screens (_showHighestWinsRoundWinner, _enterFinalMode,
-        // _showLongBattleSegmentWinner) all own their own audio and must not be
-        // preceded by a second overlapping TTS call.
         if (this.isHighestWinsMode) {
             const result = this.sessionMode.onRoundComplete(winner);
-            if (result === "sudden_death") {
-                // 2+ countries share the top win count at 40-min end → sudden death
-                const tied = this.sessionMode.tiedCountries || [];
-                const sharedWins = tied[0]?.wins
-                    ?? this.winnerManager.getLeaderboard()[0]?.wins
-                    ?? 0;
-                this._enterHWSuddenDeath(tied, sharedWins);
-                return;
-            }
             if (result === "segment_end") {
-                // Clear winner — full-screen TIME UP owns all audio; no generic speak.
-                this._showHighestWinsRoundWinner();
+                // 40-min round finished — show winner for 1 minute, then start next round
+                this._showLongBattleSegmentWinner();
                 return;
             }
-            // Still time left — fire generic in-round audio below
-
         } else if (this.isLongBattleMode) {
             const result = this.sessionMode.onRoundComplete(winner);
             if (result === "grand_final") {
-                this._showLongBattleFinalSegmentWinner();
+                this._enterLongBattleGrandFinal();
                 return;
             }
             if (result === "segment_end") {
@@ -483,165 +449,20 @@ export default class Game {
                 this._endHighestWinsSession();
                 return;
             }
-            // Still time left — fire generic in-round audio below
-
         } else if (this.sessionStartTime > 0) {
             // Classic: 40 minutes up → Last Standing Final Mode
-            // _enterFinalMode owns its own audio — skip generic "wins!" speak.
             const elapsed = Date.now() - this.sessionStartTime;
             if (elapsed >= this.QUALIFY_DURATION_MS) {
                 this._enterFinalMode();
-                // _enterFinalMode owns audio; set a brief display then continue
-                const displayDuration = this.winnerDisplayDuration;
-                this._winnerTimerEndsAt = Date.now() + displayDuration;
-                this.restartTimer = setTimeout(() => { this._winnerTimerEndsAt = null; this._beginNextEvent(); }, displayDuration);
-                return;
             }
         }
 
-        // ── Generic in-round winner audio (only reached when NOT transitioning
-        //    to a dedicated champion / segment-end screen above) ─────────────
-        if (isTie && !winner.isSilent) {
-            this.confetti.start(this._lw / 2, this._lh * 0.4, 130);
-            try { this.audio.stopWinnerLoop(); } catch (_) {}
-            if (!keepBattleBgm) {
-                try { this.audio.stopBGM(); } catch (_) {}
-                try { this.audio.startCelebrationLoop(1800); } catch (_) {}
-            }
-            const names = (winner.countries ?? []).map(c => c.name).join(" and ");
-            if (names) this.audio.speak(`It's a tie between ${names}!`);
-        } else if (!isTie) {
-            this.confetti.start(this._lw / 2, this._lh * 0.36, 150);
-            try { this.audio.stopWinnerLoop(); } catch (_) {}
-            if (!keepBattleBgm) {
-                try { this.audio.stopBGM(); } catch (_) {}
-                try { this.audio.startCelebrationLoop(1800); } catch (_) {}
-            }
-            this.audio.speak(`${winner.country.name} wins!`);
-
-            // Classic only: remove winner from pool so they sit out until recycle
-            // Highest-Wins mode keeps everyone eligible (accumulate wins)
-            if (!this.isHighestWinsMode && !this.isLongBattleMode) {
-                this._removeWinnerFromPool(winner.country.code);
-            }
-        }
-
-        // Event is chosen once in _beginNextEvent (avoids double-pick same/adjacent repeats)
+        // Qualifying keeps random events; final uses dedicated LAST STANDING physics
+        if (this.isFinalMode) this.eventManager.pickEarthquake();
+        else this.eventManager.pick();
 
         const displayDuration = (isTie && winner.isSilent) ? 500 : this.winnerDisplayDuration;
-        this._winnerTimerEndsAt = Date.now() + displayDuration;
-        this.restartTimer = setTimeout(() => { this._winnerTimerEndsAt = null; this._beginNextEvent(); }, displayDuration);
-    }
-
-
-    /**
-     * Highest Winner Wins only: end of a 40-min window.
-     * Full-screen TIME UP — CHAMPION (no leaderboard / tray), continuous confetti + winner BGM,
-     * then next 40-min round. Does not touch Qualifier or 5H.
-     */
-    _showHighestWinsRoundWinner() {
-        const mode = this.sessionMode;
-        // Safety: if top score is still tied, force sudden death instead
-        if (mode && typeof mode._getTopTied === "function") {
-            const tied = mode._getTopTied();
-            if (tied.length >= 2) {
-                mode.tiedCountries = tied;
-                this._enterHWSuddenDeath(tied, tied[0].wins);
-                return;
-            }
-        }
-        const w = mode?.lastSegmentWinner;
-
-        this._clearRestartTimer();
-        if (this._champCountdownTimer) {
-            clearInterval(this._champCountdownTimer);
-            this._champCountdownTimer = null;
-        }
-
-        if (this.theme?.stars) this.spaceTheme.notifyNotPlaying();
-        try { this.eventManager.end(this._eventCtx()); } catch (_) {}
-        try { this._clearAllFlags(); } catch (_) {}
-        try { this.trayLauncher.cancel(); } catch (_) {}
-
-        const holdMs = (typeof mode?.constructor?.ROUND_WINNER_DISPLAY_MS === "number")
-            ? mode.constructor.ROUND_WINNER_DISPLAY_MS
-            : 60 * 1000;
-
-        // Full-screen champion presentation (same visual language as classic TIME UP)
-        this._champHwRound = true;       // marks temporary HW round champion (not 5H permanent)
-        this._champPermanent = false;
-        this._champBgmKilled = false;
-        this._champConfettiTick = 0;
-        this._champDisplayStart = Date.now();
-        this._champCountdownRemain = Math.ceil(holdMs / 1000);
-        this.isFinalMode = false;
-
-        if (w) {
-            this._grandChampion = {
-                code: w.code,
-                name: w.name,
-                image: w.image,
-                wins: w.wins || 1,
-            };
-        } else {
-            const lb = this.winnerManager.getLeaderboard();
-            const top = lb[0];
-            this._grandChampion = top
-                ? { code: top.code, name: top.name, image: top.image, wins: top.wins || 1 }
-                : { code: "??", name: "NO WINNER", image: null, wins: 0 };
-        }
-
-        this.gameState = "GRAND_CHAMPION";
-
-        // Continuous confetti + celebration SFX (not free-beats — that is 5H final only)
-        // Fire a dense initial burst from multiple points across the top for a big entrance
-        this.confetti.start(this._lw * 0.25, 0, 180, { fromTop: true });
-        this.confetti.start(this._lw * 0.50, 0, 220, { fromTop: true });
-        this.confetti.start(this._lw * 0.75, 0, 180, { fromTop: true });
-
-        // Stop any previous audio cleanly, then start the winner celebration loop.
-        // The loop runs indefinitely (no auto-stop) — it will be stopped only when
-        // the countdown reaches 0 and the next round begins.
-        try { this.audio.stopBGM(); } catch (_) {}
-        try { this.audio.stopWinnerLoop(); } catch (_) {}
-        // Use 1800ms fade-in delay (same as qualifier) so the fanfare eases in
-        // instead of blasting instantly. Clap/confetti SFX are deferred so they
-        // don't stack on top of the loop start.
-        try { this.audio.startCelebrationLoop(1800); } catch (_) {}
-        setTimeout(() => { try { this.audio.playClap();     } catch (_) {} }, 2000);
-        setTimeout(() => { try { this.audio.playConfetti(); } catch (_) {} }, 3500);
-        try {
-            const nm = this._grandChampion?.name || "Champion";
-            const wins = this._grandChampion?.wins || 1;
-            this.audio.speak(
-                `Time is up! ${nm} is the highest winner with ${wins} win${wins === 1 ? "" : "s"}!`
-            );
-        } catch (_) {}
-
-        // Track when the next clap/confetti SFX should fire so the update
-        // loop can re-trigger them at a steady cadence throughout the hold.
-        // Start cadence after the deferred first shots (2s clap, 3.5s confetti)
-        // so the loop-triggered repeats don't overlap the initial ones.
-        this._hwWinnerClapNextAt    = Date.now() + 6500;
-        this._hwWinnerConfettiNextAt = Date.now() + 10500;
-
-        // Tick countdown label; after hold → next 40-min round (resume Chariots)
-        this._champCountdownTimer = setInterval(() => {
-            this._champCountdownRemain--;
-            if (this._champCountdownRemain <= 0) {
-                clearInterval(this._champCountdownTimer);
-                this._champCountdownTimer = null;
-                this._champHwRound = false;
-                // Stop winner audio now that we're transitioning to the next round
-                try { this.audio.stopWinnerLoop(); } catch (_) {}
-                try { this.audio.playPhase('qualify'); } catch (_) {}
-                this._grandChampion = null;
-                this._hwWinnerClapNextAt    = 0;
-                this._hwWinnerConfettiNextAt = 0;
-                this.gameState = "NEXT_EVENT";
-                this._beginNextEvent();
-            }
-        }, 1000);
+        this.restartTimer = setTimeout(() => this._beginNextEvent(), displayDuration);
     }
 
     /** End Highest Winner Wins session — champion = most wins, no final. */
@@ -673,10 +494,9 @@ export default class Game {
         this._champCountdownRemain = this._champCountdownSec;
         this.gameState = "GRAND_CHAMPION";
 
+        this.audio.playPhase('champion');
         this.confetti.start(this._lw / 2, this._lh * 0.36, 90);
-        try { this.audio.stopWinnerLoop(); } catch (_) {}
-        try { this.audio.stopBGM(); } catch (_) {}
-        try { this.audio.startCelebrationLoop(1800); } catch (_) {}
+        this.audio.playWinner();
         this.audio.speak(
             `${champ.name} is the highest winner with ${champ.wins} win${champ.wins === 1 ? "" : "s"}!`
         );
@@ -721,22 +541,17 @@ export default class Game {
         // If no segment winner data (0 wins recorded), leave winnerManager.winner
         // as whatever it was so the screen is not blank.
 
-        this.gameState         = "WINNER_SHOW";
+        this.gameState = "WINNER_SHOW";
         this.winnerDisplayTime = Date.now();
-        this._winnerShowTick   = 0;  // reset so clap/confetti audio fires fresh
 
         // ~1 minute on production (5s in FAST test) before next 40-min round
         const holdMs = (typeof mode?.constructor?.ROUND_WINNER_DISPLAY_MS === "number")
             ? mode.constructor.ROUND_WINNER_DISPLAY_MS
             : 60 * 1000;
 
-        // Stop battle BGM. Play tada once, then loop the lighter confetti
-        // sparkle sound for the full 60s hold.
-        try { this.audio.stopBGM(); } catch (_) {}
-        try { this.audio.startCelebrationLoop(1800); } catch (_) {}
-
         if (w) {
             this.confetti.start(this._lw / 2, this._lh * 0.36, 120);
+            this.audio.playWinner();
             this.audio.speak(
                 `Time is up! ${w.name} wins Round ${w.segment} with ${w.wins} win${w.wins === 1 ? "" : "s"}!`
             );
@@ -749,81 +564,13 @@ export default class Game {
         }
 
         const nextSeg = (mode?.segmentIndex ?? 0) + 1;
-        this._winnerTimerEndsAt = Date.now() + holdMs;
         this.restartTimer = setTimeout(() => {
             this.restartTimer = null;
-            this._winnerTimerEndsAt = null;
-            // Stop the winner fanfare loop before starting the next round BGM
-            try { this.audio.stopWinnerLoop(); } catch (_) {}
-            // Restore battle BGM now that the 1-minute winner display is over
             if (mode && !mode.inGrandFinal) {
-                try { this.audio.playPhase('qualify'); } catch (_) {}
                 this.audio.speak(`Round ${nextSeg} begins now!`);
-            } else {
-                try { this.audio.playPhase('elimination'); } catch (_) {}
             }
             this._beginNextEvent();
         }, holdMs);
-    }
-
-    /**
-     * Last qualifying segment (round 8) is over — show a 6-second winner
-     * screen, then transition into the red Final Elimination Round cinematic.
-     * Behaviour is identical to _showLongBattleSegmentWinner except:
-     *   • holdMs is fixed at 6 s (human-readable, not a full minute)
-     *   • On timer expiry it calls _enterLongBattleGrandFinal instead of
-     *     _beginNextEvent, which loads the red circle + flag carousel screen.
-     */
-    _showLongBattleFinalSegmentWinner() {
-        const mode = this.sessionMode;
-        const w = mode?.lastSegmentWinner;
-
-        // Build winner object identical to the normal segment winner path
-        if (w) {
-            this.winnerManager.winner = {
-                country: {
-                    code : w.code,
-                    name : w.name,
-                    image: w.image,
-                },
-                _isSegmentWinner   : true,
-                _isFinalSegment    : true,   // ← flag used for title / styling
-                _segmentNumber     : w.segment,
-                _segmentWins       : w.wins,
-            };
-        }
-
-        this.gameState         = "WINNER_SHOW";
-        this.winnerDisplayTime = Date.now();
-        this._winnerShowTick   = 0;
-
-        // 15 s — enough for TTS to complete the full winner + final announcement
-        const HOLD_MS = 15000;
-
-        try { this.audio.stopBGM(); } catch (_) {}
-        try { this.audio.startCelebrationLoop(1800); } catch (_) {}
-
-        if (w) {
-            this.confetti.start(this._lw / 2, this._lh * 0.36, 120);
-            this.audio.speak(
-                `Time is up! ${w.name} wins Round ${w.segment} with ${w.wins} win${w.wins === 1 ? "" : "s"}! ` +
-                `All round winners will now face the Final Elimination Round!`
-            );
-            this._lbSegmentFlashQueue = this._lbSegmentFlashQueue || [];
-            this._lbSegmentFlashQueue.push({
-                ...w,
-                showUntil: Date.now() + Math.max(HOLD_MS, 15000),
-            });
-        }
-
-        this._winnerTimerEndsAt = Date.now() + HOLD_MS;
-        this.restartTimer = setTimeout(() => {
-            this.restartTimer      = null;
-            this._winnerTimerEndsAt = null;
-            try { this.audio.stopWinnerLoop(); } catch (_) {}
-            // Transition directly into Grand Final (red cinematic + elimination)
-            this._enterLongBattleGrandFinal();
-        }, HOLD_MS);
     }
 
     /**
@@ -831,98 +578,6 @@ export default class Game {
      * IMPORTANT: leave PLAYING immediately and clear bodies so final-elim
      * logic cannot wipe finalists before they spawn.
      */
-
-    /**
-     * Swap to standalone SmoothArenaPhysics for 5H Grand Final only.
-     * Original ArenaPhysics is preserved and restored on champion screen.
-     */
-    _activateSmoothArenaForLongBattleFinal() {
-        if (this._smoothArenaActive) return;
-        if (!this.physics?.world) return;
-        try {
-            // Keep reference to the normal arena
-            if (!this._defaultArena) this._defaultArena = this.arena;
-            // Tear down default walls so they don't double-collide
-            if (this._defaultArena?.segments) {
-                for (const w of this._defaultArena.segments) {
-                    try { Matter.World.remove(this.physics.world, w); } catch (_) {}
-                }
-            }
-            if (this._defaultArena?.rimSegments) {
-                for (const w of this._defaultArena.rimSegments) {
-                    try { Matter.World.remove(this.physics.world, w); } catch (_) {}
-                }
-            }
-            const smooth = new SmoothArenaPhysics(
-                this.physics.world,
-                this.layout.arenaX,
-                this.layout.arenaY,
-                this.layout.arenaRadius
-            );
-            this.arena = smooth;
-            this._smoothArenaActive = true;
-            // Point drain + elimination at the new arena
-            if (this.drain) this.drain.arena = smooth;
-            if (this.eliminationManager) this.eliminationManager.arena = smooth;
-            console.log("[SmoothArena] active");
-        } catch (e) {
-            console.warn("[LongBattle] Smooth arena activate failed", e);
-        }
-    }
-
-    _restoreDefaultArena() {
-        if (!this._smoothArenaActive) return;
-        try {
-            if (this.arena && typeof this.arena.destroy === "function") {
-                this.arena.destroy();
-            }
-            const def = this._defaultArena;
-            if (def) {
-                // Re-add default wall bodies if they were removed
-                if (def.segments) {
-                    for (const w of def.segments) {
-                        try {
-                            if (!this.physics.world.bodies.includes(w)) {
-                                Matter.World.add(this.physics.world, w);
-                            }
-                        } catch (_) {}
-                    }
-                }
-                def.cx = this.layout.arenaX;
-                def.cy = this.layout.arenaY;
-                def.radius = this.layout.arenaRadius;
-                if (typeof def.syncWalls === "function") def.syncWalls();
-                this.arena = def;
-                if (this.drain) this.drain.arena = def;
-                if (this.eliminationManager) this.eliminationManager.arena = def;
-            }
-            this._smoothArenaActive = false;
-            console.log("[SmoothArena] restored default ArenaPhysics");
-        } catch (e) {
-            console.warn("[LongBattle] Restore arena failed", e);
-        }
-    }
-
-
-    /** localStorage flag_battle_test_classic_smooth=1 → force CLASSIC for physics testing */
-    _wantClassicSmoothTest() {
-        try {
-            return typeof localStorage !== "undefined"
-                && localStorage.getItem("flag_battle_test_classic_smooth") === "1";
-        } catch (_) {
-            return false;
-        }
-    }
-
-    /**
-     * All events + 5H Grand Final → SmoothArenaPhysics.
-     * Shared bounce / horizontal lock / perf for every event.
-     */
-    _syncSmoothArenaForCurrentEvent() {
-        // Always use SmoothArena (all events)
-        this._activateSmoothArenaForLongBattleFinal();
-    }
-
     _enterLongBattleGrandFinal() {
         const mode = this.sessionMode;
         let finalists = mode?.getGrandFinalists?.() ?? [];
@@ -1005,19 +660,12 @@ export default class Game {
         for (const c of countries) {
             if (!c?.code || seen.has(c.code)) continue;
             seen.add(c.code);
-            // Force image through the flagLoader cache — ensures img.complete is true
-            // for the cinematic (WinnerManager reconstructs images that may not be loaded)
-            if (this.flagLoader) {
-                c.image = this.flagLoader.load(c.code);
-            }
             unique.push(c);
         }
 
         this.isFinalMode = true;
         try { this.spaceTheme?.setAsteroidsDisabled?.(true); } catch (_) {}
         this._hwSuddenDeathActive = false;
-        // 5H Grand Final only: competitor-style standalone physics
-        this._activateSmoothArenaForLongBattleFinal();
         this._finalists = unique.map(c => ({ country: c }));
         this._finalEliminated = [];
         this._finalTotalCount = unique.length;
@@ -1032,37 +680,10 @@ export default class Game {
         this.totalCountries = unique.length;
 
         this.winnerManager.clearWins();
-        // Pre-seed with each finalist's qualifying round win count so the
-        // leaderboard shows meaningful numbers from the start of the grand final.
-        // During the grand final these counts are frozen — the board is for
-        // context only (who won how many rounds to get here); eliminations are
-        // tracked visually via the bottom tray, not via win increments.
-        for (const c of unique) {
-            const segWin = mode?.segmentWinners?.find(w => w.code === c.code);
-            this.winnerManager._wins[c.code] = {
-                name    : c.name,
-                imageSrc: c.image?.src ?? null,
-                wins    : segWin?.wins ?? 0,
-            };
-        }
         this.leaderboardRenderer.reset();
         this.leaderboardRenderer.setFinalMode(true);
-        this.leaderboardRenderer.setGrandFinal(true);
-        // Push the seeded data into the renderer immediately
-        try {
-            this.leaderboardRenderer.markDirty?.(
-                this.winnerManager.getLeaderboard(), null
-            );
-        } catch (_) {}
-
-        // Reset cinematic so it fires fresh on entry
-        this._gfCinematicSpoken = false;
-        this._gfRayAngle        = 0;
-        this._gfRingPhase       = 0;
 
         this.audio.playPhase('elimination');
-        // NOTE: country names are NOT listed individually per design spec —
-        // the visual cinematic shows them all in the circle with name labels.
         this.audio.speak(
             `Grand Final elimination! ${unique.length} round winners — last flag standing is the champion!`
         );
@@ -1077,14 +698,6 @@ export default class Game {
             unique.map(c => c.name).join(", ")
         );
 
-        // Show the red Final Elimination Round cinematic for ~10 s so every
-        // viewer can clearly see all finalist flags in the circle before the
-        // battle begins.  At 60 fps that is ≈600 frames; we use 540 as a
-        // comfortable target (9 s).  The cinematic is _drawGrandFinalCinematic
-        // which fires whenever isFinalMode && isLongBattleMode during NEXT_EVENT
-        // or COUNTDOWN states.
-        const CINEMATIC_FRAMES = 900; // ≈ 15 s at 60 fps
-
         // Brief pause then spawn via standard final pipeline (once)
         this._clearRestartTimer();
         this.restartTimer = setTimeout(() => {
@@ -1096,7 +709,7 @@ export default class Game {
             this.activeCountries = unique.slice();
             this.totalCountries = unique.length;
             this._lbGrandFinalPending = false;
-            this.nextEventDuration = CINEMATIC_FRAMES;
+            this.nextEventDuration = 130;
             this._beginNextEvent();
         }, 1200);
     }
@@ -1121,17 +734,12 @@ export default class Game {
         this._suddenDeathBannerStart = Date.now();
         this._suddenDeathBannerDuration = 3800; // ms to display the banner
 
-        // Announcement — no country names (keeps VO short)
+        // Announcement
+        const names = tiedCountries.map(c => c.name).join(", ");
         this.audio.playRoundStart();
-        const n = tiedCountries.length;
         this.audio.speak(
-            `It's a tie on ${topWins} win${topWins === 1 ? "" : "s"}! `
-            + `${n} countr${n === 1 ? "y" : "ies"} will participate in sudden death!`
+            `It's a tie! ${tiedCountries.length} countries are level on ${topWins} win${topWins === 1 ? "" : "s"}: ${names}. Sudden death!`
         );
-
-        // No asteroids in Highest Wins sudden death
-        try { this.spaceTheme?.setAsteroidsDisabled?.(true); } catch (_) {}
-        if (this.spaceTheme) this.spaceTheme.onFlagBurned = null;
 
         // Pre-load spawn positions for the tied countries so _beginNextEvent
         // can run immediately after the banner
@@ -1148,9 +756,9 @@ export default class Game {
         this._nextSpawnPositions = positions;
         // Few countries → large spacing → oversized flags that can't exit the gap.
         // Match the tighter final-mode cap so size stays consistent.
-        const rawW = Math.max(12, spacing * 0.95);
-        this._nextFlagW = Math.min(rawW, 19);
-        this._nextFlagH = Math.max(8, Math.round(this._nextFlagW * 0.667));
+        const rawW = Math.max(9, spacing * 0.85);
+        this._nextFlagW = Math.min(rawW, 14);
+        this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));
 
         this._clearAllFlags();
 
@@ -1235,7 +843,7 @@ export default class Game {
         this._finalElimPhase = null;
 
         if (this.isFinalMode) {
-            // Final / Long-Battle Grand Final: only finalists
+            // Final / Long-Battle Grand Final: only finalists, Last Standing
             const finals = (this._finalists || [])
                 .map(f => f?.country)
                 .filter(Boolean);
@@ -1248,23 +856,14 @@ export default class Game {
             }
             this.totalCountries = this.activeCountries.length;
             this._finalTotalCount = Math.max(this._finalTotalCount || 0, this.totalCountries);
-            // Smooth arena (5H GF): Classic only — no event forces fighting the physics
-            if (this._smoothArenaActive) {
-                this.eventManager.pickClassic();
-            } else {
-                this.eventManager.pickEarthquake();
-            }
+            this.eventManager.pickEarthquake();
         } else if (this.isHighestWinsMode || this.isLongBattleMode) {
             // Highest Wins / Long Battle: everyone stays eligible; mode picks the batch
             this.activeCountries = this.sessionMode.pickBatch();
-            // Test: localStorage flag_battle_test_classic_smooth=1 forces CLASSIC + smooth physics
-            if (this._wantClassicSmoothTest()) this.eventManager.pickClassic();
-            else this.eventManager.pick();
+            this.eventManager.pick();
         } else {
             // Classic qualifying: winners sit out until pool recycles
             this.activeCountries = this._pickQualifyBatch();
-            if (this._wantClassicSmoothTest()) this.eventManager.pickClassic();
-            else this.eventManager.pick();
         }
 
         this.totalCountries = this.activeCountries.length;
@@ -1276,13 +875,12 @@ export default class Game {
         this._nextSpawnPositions = positions;
         // Keep flags small enough to exit the gap. Fewer countries → larger spacing;
         // hard-cap so elim / low-count rounds never spawn oversized flags.
-        // Slightly larger (was spacing*0.95 / max 22·27·33·40)
-        const rawW = Math.max(13, spacing * 1.05);
+        const rawW = Math.max(9, spacing * 0.85);
         const maxW = this.isFinalMode
-            ? 25
-            : (this.totalCountries <= 40 ? 30 : (this.totalCountries <= 100 ? 36 : 44));
+            ? 17
+            : (this.totalCountries <= 40 ? 20 : (this.totalCountries <= 100 ? 25 : 30));
         this._nextFlagW = Math.min(rawW, maxW);
-        this._nextFlagH = Math.max(9, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
+        this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
         this._clearAllFlags();
 
@@ -1305,8 +903,6 @@ export default class Game {
     // ── Reset ─────────────────────────────────────────────────────────────────
 
     _doReset() {
-        try { this.audio.stopWinnerLoop(); } catch (_) {}
-
         if (this.restartTimer) {
             clearTimeout(this.restartTimer);
             clearInterval(this.restartTimer);
@@ -1325,8 +921,6 @@ export default class Game {
         this.winnerManager.clearWins();
         this.winnerManager.winner = null;
         this.leaderboardRenderer.reset();
-        this.leaderboardRenderer.setGrandFinal(false);
-        this.leaderboardRenderer.setFinalMode(false);
 
         // Reset session state
         this.sessionStartTime  = Date.now();
@@ -1346,11 +940,6 @@ export default class Game {
         this._finalElimPhase   = null;
         this._finalStalemateSince = 0;
         this._emptyArenaSince     = 0;
-
-        // Winner screen state reset
-        this._winnerTimerEndsAt = null;
-        this._winnerShowTick    = 0;
-        this._champBgmKilled    = false;
 
         // Sudden death tiebreaker reset
         this._hwSuddenDeathActive = false;
@@ -1391,10 +980,10 @@ export default class Game {
             this.layout.arenaX, this.layout.arenaY, spawnRadius, this.totalCountries
         );
         this._nextSpawnPositions = positions;
-        const rawW0 = Math.max(12, spacing * 0.95);
-        const maxW0 = this.totalCountries <= 40 ? 27 : (this.totalCountries <= 100 ? 33 : 40);
+        const rawW0 = Math.max(9, spacing * 0.85);
+        const maxW0 = this.totalCountries <= 40 ? 20 : (this.totalCountries <= 100 ? 25 : 30);
         this._nextFlagW = Math.min(rawW0, maxW0);
-        this._nextFlagH = Math.max(8, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
+        this._nextFlagH = Math.max(6, Math.round(this._nextFlagW * 0.667));  // standard 3:2 flag ratio
 
         this.eventManager.pick();
         this._beginNextEvent();
@@ -1403,13 +992,10 @@ export default class Game {
     // ── Countdown ─────────────────────────────────────────────────────────────
 
     _beginCountdown() {
-        try { this.audio.stopWinnerLoop(); } catch (_) {}
         if (this._champPermanent || this.gameState === "GRAND_CHAMPION") {
             console.warn("[Game] _beginCountdown blocked — champion locked");
             return;
         }
-        // Classic (test) or 5H GF → smooth physics; else default
-        this._syncSmoothArenaForCurrentEvent();
         this.gameState           = "COUNTDOWN";
         this.restartCountdown    = 3;
         this._countdownTickStart = performance.now();
@@ -1423,17 +1009,11 @@ export default class Game {
         // Base gap + progressive widen as flags are eliminated (see ArenaPhysics.setRemainingFlags).
         // Final starts a bit tighter so exits feel deliberate at the start.
         if (this.isFinalMode) {
-            if (this._smoothArenaActive) {
-                // Pass-2: wider gap for clean competitor-style exits
-                this.arena.initialGapSize = 6;
-                this.arena.maxGapSize     = 12;
-            } else {
-                this.arena.initialGapSize = 3;
-                this.arena.maxGapSize     = 8;
-            }
+            this.arena.initialGapSize = 3;
+            this.arena.maxGapSize     = 8;
         } else {
-            this.arena.initialGapSize = 2;  // was 3 — slower baseline drain between events
-            this.arena.maxGapSize     = 5;  // was 7 — less wide-open late game
+            this.arena.initialGapSize = 3;  // qualifying: ~30-40s rounds with progressive open
+            this.arena.maxGapSize     = 7;
         }
         this.arena.syncWalls();
 
@@ -1464,12 +1044,6 @@ export default class Game {
         this.audio.resetMilestones();
         this.audio.playCountdown(3);
 
-        // 5H GF smooth physics: lock spin + soft bounce on newly queued flags
-        // (bodies may still be spawning across countdown frames — tune after full spawn)
-        if (this._smoothArenaActive) {
-            this._smoothTunePending = true;
-        }
-
         this._clearRestartTimer();
         this.restartTimer = setInterval(() => {
             this.restartCountdown--;
@@ -1496,77 +1070,11 @@ export default class Game {
         }, 1000);
     }
 
-    /**
-     * During COUNTDOWN: lock horizontal + keep minimum speed so packed flags
-     * do not freeze or tilt while the arena is building.
-     */
-    _stirFlagsDuringBuild() {
-        const flags = this.flagManager?.flags;
-        if (!flags || !flags.length) return;
-        const minSpd = 2.8;
-        for (let i = 0; i < flags.length; i++) {
-            const body = flags[i]?.body;
-            if (!body) continue;
-            try {
-                if (body.isSleeping) Matter.Sleeping.set(body, false);
-                Matter.Body.setAngularVelocity(body, 0);
-                if (Math.abs(body.angle) > 0.001) Matter.Body.setAngle(body, 0);
-            } catch (_) {}
-            try {
-                const vx = body.velocity.x;
-                const vy = body.velocity.y;
-                const spd = Math.hypot(vx, vy);
-                if (spd < minSpd) {
-                    const a = Math.random() * Math.PI * 2;
-                    const s = minSpd + Math.random() * 2.5;
-                    Matter.Body.setVelocity(body, {
-                        x: Math.cos(a) * s,
-                        y: Math.sin(a) * s,
-                    });
-                }
-            } catch (_) {}
-        }
-    }
-
     _startPlaying() {
         this.gameState     = "PLAYING";
         this.arena.state   = "PLAYING";
         this.arena.gapSize = this.arena.initialGapSize;
-        // Barrier rim: Highest Winner Wins only (test before rolling out)
-        try {
-            if (typeof this.arena.enableRim === "function") {
-                this.arena.enableRim(!!this.isHighestWinsMode);
-            }
-        } catch (_) {}
         this.arena.syncWalls();
-
-        // Horizontal orientation + immediate motion so flags collide right away
-        try {
-            const flags = this.flagManager?.flags || [];
-            for (const flag of flags) {
-                const body = flag?.body;
-                if (!body) continue;
-                try {
-                    Matter.Body.setAngle(body, 0);
-                    Matter.Body.setAngularVelocity(body, 0);
-                    Matter.Sleeping.set(body, false);
-                } catch (_) {}
-                const spd = Math.hypot(body.velocity.x, body.velocity.y);
-                if (spd < 2.5) {
-                    const a = Math.random() * Math.PI * 2;
-                    const s = 3.2 + Math.random() * 2.8;
-                    Matter.Body.setVelocity(body, {
-                        x: Math.cos(a) * s,
-                        y: Math.sin(a) * s,
-                    });
-                }
-            }
-            if (this._smoothArenaActive) {
-                SmoothArenaPhysics.tuneFlagBodies(flags);
-                this._smoothTunePending = false;
-            }
-        } catch (_) {}
-
         this.audio.playRoundStart();
         // If championship already finished, never keep battle BGM running
         if (this.sessionMode && this.sessionMode.ended) {
@@ -1578,9 +1086,9 @@ export default class Game {
         // Reset asteroid elimination tracking for this round
         this._asteroidElimMsg = null;
 
-        // Elimination / Grand Final / HW sudden death: never allow asteroids
+        // Elimination / Grand Final: NEVER allow asteroids (empty-arena softlock)
         if (this.theme?.stars) {
-            if (this.isFinalMode || this._hwSuddenDeathActive) {
+            if (this.isFinalMode) {
                 this.spaceTheme.setAsteroidsDisabled(true);
                 this.spaceTheme.onFlagBurned = null;
             } else {
@@ -1693,102 +1201,23 @@ export default class Game {
             return;
         }
 
-        // Keep confetti alive during champion screen
+        // Keep confetti alive during champion screen (no looping battle/celebration BGM)
         if (this.gameState === "GRAND_CHAMPION") {
+            // Ensure post-countdown battle track cannot keep playing
+            if (!this._champBgmKilled) {
+                this._champBgmKilled = true;
+                try { this.audio.stopBGM(); } catch (_) {}
+            }
             this.confetti.update();
             this._champConfettiTick = (this._champConfettiTick || 0) + 1;
-
-            // Highest Wins 40-min ROUND winner: continuous confetti + looping winner audio
-            if (this._champHwRound) {
-                // Dense, uninterrupted confetti rain from multiple top positions —
-                // fires every 12 ticks (~5× per second at 60fps) for a wall-to-wall effect
-                if (this._champConfettiTick % 12 === 0) {
-                    // Alternate left/center/right sources so coverage is even
-                    const xPos = [0.2, 0.5, 0.8][Math.floor(this._champConfettiTick / 12) % 3];
-                    this.confetti.rain(this._lw, 12, { alphaScale: 0.88, fromTop: true, xFrac: xPos });
-                }
-                // Burst fireworks occasionally for extra visual punch
-                if (this._champConfettiTick % 72 === 0) {
-                    try { this.confetti.burstFireworks?.(this._lw, this._lh); } catch (_) {}
-                }
-
-                // Re-fire clap/confetti SFX on a time-based cadence so they keep
-                // playing throughout the full countdown (audio loop runs continuously
-                // via startCelebrationLoop; these are supplementary one-shot sounds)
-                const nowMs = Date.now();
-                if (this._hwWinnerClapNextAt && nowMs >= this._hwWinnerClapNextAt) {
-                    try { this.audio.playClap(); } catch (_) {}
-                    this._hwWinnerClapNextAt = nowMs + 4500; // clap roughly every 4.5s
-                }
-                if (this._hwWinnerConfettiNextAt && nowMs >= this._hwWinnerConfettiNextAt) {
-                    try { this.audio.playConfetti(); } catch (_) {}
-                    this._hwWinnerConfettiNextAt = nowMs + 7000; // confetti SFX every 7s
-                }
-
-                // Safety net: if the celebration loop somehow stopped, restart it
-                if (this._champConfettiTick % 300 === 0) {
-                    try {
-                        if (typeof this.audio.isCelebrationLoopPlaying === "function"
-                            && !this.audio.isCelebrationLoopPlaying()) {
-                            this.audio.startCelebrationLoop(1800);
-                        }
-                    } catch (_) {}
-                }
-                return;
+            // Soft visual rain only — stop after ~8s so it settles
+            if (this._champConfettiTick < 480 && this._champConfettiTick % 36 === 0) {
+                this.confetti.rain(this._lw, 6, { alphaScale: 0.5 });
             }
-
-            // 5H permanent champion: endless visuals; audio = startCelebrationLoop (infinite)
-            if (this._champPermanent) {
-                if (this._champConfettiTick % 18 === 0) {
-                    this.confetti.rain(this._lw, 10, { alphaScale: 0.85 });
-                }
-                if (this._champConfettiTick % 40 === 0) {
-                    try { this.confetti.burstFireworks?.(this._lw, this._lh); } catch (_) {}
-                }
-                return;
-            }
-
-            // Classic qualifier (40-min): continuous confetti + looping champion BGM
-            // until the countdown expires. _champBgmKilled guard removed so the
-            // champion audio keeps running the full hold duration.
-            if (this._champConfettiTick % 22 === 0) {
-                this.confetti.rain(this._lw, 7, { alphaScale: 0.80, fromTop: true });
-            }
-            if (this._champConfettiTick % 55 === 0) {
-                try { this.audio.playClap(); } catch (_) {}
-            }
-            if (this._champConfettiTick % 90 === 0) {
-                try { this.audio.playConfetti(); } catch (_) {}
-            }
-            return;
-        }
-
-        // ── WINNER_SHOW: block ALL game logic — nothing runs behind the winner screen ──
-        // The restartTimer (set by handleWinner / _showLongBattleSegmentWinner) is the
-        // sole driver of progression. No arena ticking, no nextEventTimer, nothing.
-        if (this.gameState === "WINNER_SHOW") {
-            this.confetti.update();
-            this.fx.update();
-            this._winnerShowTick = (this._winnerShowTick || 0) + 1;
-
-            // ── 5H segment winner: continuous confetti rain for full 60s hold ──
-            // Audio handled by startCelebrationLoop: tada once, then sparkle loop.
-            const isSegWinner = !!this.winnerManager?.winner?._isSegmentWinner;
-            if (isSegWinner && this.isLongBattleMode) {
-                if (this._winnerShowTick % 20 === 0) {
-                    this.confetti.rain(this._lw, 7, { alphaScale: 0.85, fromTop: true });
-                }
-            } else {
-                // Default: drip confetti for first ~4s only (non-5H winner shows)
-                if (this._winnerShowTick < 240 && this._winnerShowTick % 18 === 0) {
-                    this.confetti.rain(this._lw, 4, { alphaScale: 0.7 });
-                }
-                const longHold = this._winnerTimerEndsAt && (this._winnerTimerEndsAt - Date.now()) > 5000;
-                if (longHold) {
-                    if (this._winnerShowTick === 72)  { try { this.audio.playClap();     } catch(_){} }
-                    if (this._winnerShowTick === 150) { try { this.audio.playConfetti(); } catch(_){} }
-                    if (this._winnerShowTick === 210) { try { this.audio.playClap();     } catch(_){} }
-                }
+            // One short celebration window only (~3s), then silence
+            if (this._champConfettiTick < 180) {
+                if (this._champConfettiTick === 90) this.audio.playConfetti();
+                if (this._champConfettiTick === 150) this.audio.playClap();
             }
             return;
         }
@@ -1835,38 +1264,26 @@ export default class Game {
             }
             this.physics.update();
             this.arena.update();
-            // Keep flags horizontal + moving while arena builds
-            try { this._stirFlagsDuringBuild(); } catch (_) {}
         }
 
         if (state === "PLAYING") {
-            const liveCount = this.flagManager?.flags?.length ?? 0;
-            // PERFORMANCE: scale solver + draw cost with flag count (rules unchanged)
-            try { this.physics.setFlagLoad(liveCount); } catch (_) {}
-            try {
-                const sample = this.flagManager.flags[0];
-                if (sample?.constructor) sample.constructor.crowdDraw = liveCount > 80;
-            } catch (_) {}
             this.arena.update();
             this.eventManager.update(this._eventCtx());
             this.physics.update();
-            this.flagManager.update(this._smoothArenaActive ? null : this.arena);
-            if (this._smoothTunePending && this.flagManager.flags.length >= (this._spawnTotal || 0)) {
-                SmoothArenaPhysics.tuneFlagBodies(this.flagManager.flags);
-                this._smoothTunePending = false;
-            }
+            this.flagManager.update(this.arena);
 
             if (!this.arena.isIntro) {
-                // Final-mode ONLY: seal gap while ELIMINATED card / settle (no mid-card exits).
-                // Qualifying and other events never enter this branch.
+                // Final-mode freeze: gap sealed during ELIMINATED card + settle
                 if (this.isFinalMode && this._finalElimFreeze) {
-                    if (this.arena && this.arena.gapSize !== 0) {
+                    // Hard-lock gap closed every frame (prevents event/arena from reopening)
+                    if (this.arena.gapSize !== 0) {
                         this.arena.gapSize = 0;
                         this.arena.syncWalls();
                     }
 
                     const now = Date.now();
                     if (this._finalElimPhase === "elim" && now >= this._finalElimFreezeUntil) {
+                        // Switch to settle: flags wobble, "LAST FLAG STANDING" center
                         this._finalElimPhase = "settle";
                         this._finalElimActive = null;
                         this._elimFlashQueue = [];
@@ -1875,10 +1292,9 @@ export default class Game {
                         this._endFinalElimFreeze();
                     }
 
-                    if (this.arena) this.arena._flagsRef = this.flagManager.flags;
-                    // Soft rim safety only — no velocity damp (avoids shake)
-                    if ((this._frame % 8) === 0) {
-                        this._containFlagsDuringFreeze(false);
+                    // Keep remaining flags inside + gentle damp (no exits during card)
+                    if (evenFrame) {
+                        this._containFlagsDuringFreeze();
                     }
                 } else {
                     const countBefore = this.flagManager.flags.length;
@@ -1894,11 +1310,7 @@ export default class Game {
 
                     // Skip classic drain in final mode — LastStandingEvent owns forces
                     // (avoids double tangential pull that creates rim-snake motion)
-                    // PERFORMANCE: drain less often when the arena is crowded
-                    const nFlags = this.flagManager.flags.length;
-                    const drainEvery = nFlags > 180 ? 3 : (nFlags > 100 ? 2 : 1);
-                    const runDrain = ((this._frame % drainEvery) === 0);
-                    if (runDrain && !this.isFinalMode) {
+                    if (evenFrame && !this.isFinalMode) {
                         this.drain.update();
                         this.drain.applyDrainForce(this.flagManager.flags);
                     } else if (evenFrame && this.isFinalMode) {
@@ -2156,7 +1568,7 @@ export default class Game {
         }
     }
 
-    /** Final-mode only: seal gap + show ELIMINATED card (no exits while card is up). */
+    /** Seal gap and show center ELIMINATED card for one flag. */
     _startFinalElimFreeze(country, remaining) {
         const now = Date.now();
         this._finalElimFreeze = true;
@@ -2165,11 +1577,12 @@ export default class Game {
         this._finalElimActive = { country, remaining, start: now };
         this._elimFlashQueue = [{ country, remaining, start: now }];
 
-        // Close gap only in elimination / final mode
-        if (this.isFinalMode && this.arena) {
-            this.arena.gapSize = 0;
-            this.arena.syncWalls();
-        }
+        // Seal arena: zero gap, full wall ring — flags stay in and wobble
+        this.arena.gapSize = 0;
+        this.arena.syncWalls();
+
+        // Yank every remaining flag firmly inside so none slip out mid-card
+        this._containFlagsDuringFreeze(true);
     }
 
     /**
@@ -2177,14 +1590,10 @@ export default class Game {
      * @param {boolean} hard — stronger inward reset right after an exit
      */
     _containFlagsDuringFreeze(hard = false) {
-        // Final-mode safety only: pull bodies that slipped past the rim back in.
-        // No velocity damping — preserves lively bounce/stir while gap is closed.
-        if (!this.isFinalMode || !this.arena) return;
-
         const cx = this.arena.cx;
         const cy = this.arena.cy;
         const R  = this.arena.radius;
-        const limit = R * 0.94; // only if clearly past wall
+        const limit = R * 0.82;
 
         for (const f of this.flagManager.flags) {
             const b = f.body;
@@ -2195,23 +1604,33 @@ export default class Game {
             const dist = Math.hypot(dx, dy) || 0.001;
 
             if (dist > limit) {
-                const s = (R * 0.88) / dist;
+                const s = (limit * 0.9) / dist;
                 Matter.Body.setPosition(b, {
                     x: cx + dx * s,
                     y: cy + dy * s,
                 });
-                // Reflect outward speed inward (bounce), keep tangential
+                // Kill outward velocity so they don't immediately re-exit
                 const vx = b.velocity.x;
                 const vy = b.velocity.y;
-                const nx = dx / dist;
-                const ny = dy / dist;
-                const radial = vx * nx + vy * ny;
+                const radial = (vx * dx + vy * dy) / dist;
                 if (radial > 0) {
                     Matter.Body.setVelocity(b, {
-                        x: vx - 2 * radial * nx,
-                        y: vy - 2 * radial * ny,
+                        x: vx - (dx / dist) * radial,
+                        y: vy - (dy / dist) * radial,
                     });
                 }
+            }
+
+            if (hard) {
+                Matter.Body.setVelocity(b, {
+                    x: b.velocity.x * 0.45,
+                    y: b.velocity.y * 0.45,
+                });
+            } else {
+                Matter.Body.setVelocity(b, {
+                    x: b.velocity.x * 0.96,
+                    y: b.velocity.y * 0.96,
+                });
             }
             Matter.Sleeping.set(b, false);
         }
@@ -2260,7 +1679,6 @@ export default class Game {
     // ── Grand Champion ────────────────────────────────────────────────────────
 
     _triggerGrandChampion(country) {
-        this._restoreDefaultArena();
         this._grandChampion      = country;
         this.gameState           = "GRAND_CHAMPION";
         this._champDisplayStart  = Date.now();
@@ -2302,11 +1720,15 @@ export default class Game {
             this.eliminationManager._lastBatchSize = 0;
         }
 
-        // Stop elimination music; start low free-beats champion BGM (loops until HOME)
-        try { this.audio.stopWinnerLoop(); } catch (_) {}
+        // Stop looping post-countdown battle BGM (qualify / elimination track)
         try { this.audio.stopBGM(); } catch (_) {}
+
+        // Celebration: short one-shot sounds only (battle BGM stays OFF)
         this.confetti.start(this._lw / 2, this._lh * 0.08, 220, { fromTop: true });
-        try { this.audio.playPhase('champion', { loop: true }); } catch (_) {}
+        this.audio.playPhase('champion', { loop: false });
+        this.audio.playWinner();
+        this.audio.playClap();
+        this.audio.playConfetti();
         if (country?.name) {
             const label = permanent
                 ? "5 Hour Championship champion"
@@ -2336,76 +1758,6 @@ export default class Game {
         }, 1000);
     }
 
-    /** Faint HOME button on 5H champion screen (bottom center). */
-    _drawChampHomeButton(ctx) {
-        const w = Math.min(140, this._lw * 0.36);
-        const h = 32;
-        const x = (this._lw - w) / 2;
-        const y = this._lh - h - Math.max(18, this._lh * 0.035);
-        this._champHomeBtn = { x, y, w, h };
-
-        ctx.save();
-        ctx.globalAlpha = 0.28;
-        ctx.fillStyle = "rgba(255,255,255,0.08)";
-        ctx.strokeStyle = "rgba(255,255,255,0.22)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        if (typeof ctx.roundRect === "function") ctx.roundRect(x, y, w, h, 8);
-        else ctx.rect(x, y, w, h);
-        ctx.fill();
-        ctx.stroke();
-        ctx.globalAlpha = 0.40;
-        ctx.fillStyle = "#E8E0FF";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.font = gf(600, 12);
-        ctx.fillText("HOME  ·  RESTART", x + w / 2, y + h / 2);
-        ctx.restore();
-    }
-
-    /**
-     * Canvas-space click on champion HOME button → return to start / home.
-     * @returns {boolean} true if handled
-     */
-    tryChampHomeClick(cssX, cssY) {
-        if (this.gameState !== "GRAND_CHAMPION") return false;
-        const btn = this._champHomeBtn;
-        if (!btn) return false;
-        // Convert CSS coords to logical canvas coords
-        const rect = this.canvas.getBoundingClientRect();
-        const sx = this._lw / (rect.width || this._lw);
-        const sy = this._lh / (rect.height || this._lh);
-        const x = (cssX - rect.left) * sx;
-        const y = (cssY - rect.top) * sy;
-        if (x < btn.x || x > btn.x + btn.w || y < btn.y || y > btn.y + btn.h) return false;
-        this.returnToHome();
-        return true;
-    }
-
-    /** Soft reset to START_SCREEN so main can show the home overlay. */
-    returnToHome() {
-        try { this.audio.stopWinnerLoop(); } catch (_) {}
-        try { this.audio.stopBGM(); } catch (_) {}
-        if (this._champCountdownTimer) {
-            clearInterval(this._champCountdownTimer);
-            this._champCountdownTimer = null;
-        }
-        this._clearRestartTimer();
-        this._champPermanent = false;
-        this._lbGrandFinalPending = false;
-        this.isFinalMode = false;
-        this._grandChampion = null;
-        this._finalists = [];
-        this._finalEliminated = [];
-        this._finalElimFreeze = false;
-        this._clearAllFlags();
-        try { this.confetti.particles = []; } catch (_) {}
-        this.gameState = "START_SCREEN";
-        if (typeof this.onRequestHome === "function") {
-            try { this.onRequestHome(); } catch (_) {}
-        }
-    }
-
     // ── Draw ──────────────────────────────────────────────────────────────────
 
     draw() {
@@ -2431,44 +1783,7 @@ export default class Game {
 
         if (this.gameState === "START_SCREEN") return;
 
-        // ── 5H Grand Final cinematic: full true-black screen, no UI behind it ──
-        if ((this.gameState === "NEXT_EVENT" || this.gameState === "COUNTDOWN")
-                && this.isFinalMode && this.isLongBattleMode) {
-            this._drawGrandFinalCinematic(ctx);
-            this.confetti.draw(ctx);
-            return;
-        }
-
         if (this.gameState === "GRAND_CHAMPION") {
-            const country = this._grandChampion;
-            // Unique 5H layout ONLY for permanent 5H championship
-            if (this._champPermanent && country) {
-                const entry = this.winnerManager?._wins?.[country.code];
-                const winnerObj = {
-                    country: {
-                        code: country.code,
-                        name: country.name,
-                        image: country.image ?? entry?.imageSrc ?? null,
-                    },
-                    _isSegmentWinner: false,
-                    _isGrandChampion: true,
-                };
-                const animT = Math.min(1, (Date.now() - (this._champDisplayStart || Date.now())) / 600);
-                this.winnerRender.draw(
-                    ctx, winnerObj,
-                    this._lw, this._lh,
-                    false,
-                    animT,
-                    this.layout.arenaX, this.layout.arenaY, this.layout.arenaRadius,
-                    true, 0,
-                    null
-                );
-                this.confetti.draw(ctx);
-                this._drawChampHomeButton(ctx);
-                return;
-            }
-
-            // Highest Wins / classic final / other — original TIME UP champion screen
             this._drawGrandChampionScreen(ctx);
             this.confetti.draw(ctx);
             return;
@@ -2480,39 +1795,6 @@ export default class Game {
             return;
         }
 
-        // ── 5H segment winner: full-screen celebration — hide ALL UI behind winner overlay ──
-        // Only the arena disc circle, winner card, and confetti are shown.
-        // Leaderboard, bottom tray, progress bar, flags are all suppressed.
-        if (this.gameState === "WINNER_SHOW"
-            && this.winnerManager?.winner?._isSegmentWinner
-            && this.isLongBattleMode) {
-            // Draw dark full-screen blackout
-            ctx.fillStyle = "rgba(5, 8, 22, 0.92)";
-            ctx.fillRect(0, 0, this._lw, this._lh);
-            // Draw the arena ring only (no flags inside it)
-            this.arenaRenderer.draw(ctx, this.arena, this.theme);
-            // Winner overlay
-            const elapsed5h = Date.now() - this.winnerDisplayTime;
-            const animT5h   = Math.min(1, elapsed5h / 450);
-            let secsRemain5h = null;
-            // Never show "NEXT ROUND IN" counter on the final segment winner screen
-            // (it leads to Grand Final, not another round)
-            if (this._winnerTimerEndsAt && !this.winnerManager?.winner?._isFinalSegment) {
-                const left = Math.max(0, (this._winnerTimerEndsAt - Date.now()) / 1000);
-                if (left > 0) secsRemain5h = left;
-            }
-            this.winnerRender.draw(
-                ctx, this.winnerManager.winner,
-                this._lw, this._lh,
-                false, animT5h,
-                this.layout.arenaX, this.layout.arenaY, this.layout.arenaRadius,
-                false, 0,
-                secsRemain5h
-            );
-            this.confetti.draw(ctx);
-            return;
-        }
-
         this.leaderboardRenderer.draw(
             ctx,
             this.winnerManager.getLeaderboard(),
@@ -2520,8 +1802,8 @@ export default class Game {
             this.layout.lbRowH, this.layout.lbRowCount
         );
 
-        // Long Battle: flash segment winners below leaderboard (not during Grand Final)
-        if (this.isLongBattleMode && !this.sessionMode?.inGrandFinal) {
+        // Long Battle: flash segment winners below leaderboard
+        if (this.isLongBattleMode) {
             this._drawLongBattleSegmentStrip(ctx);
         }
 
@@ -2545,47 +1827,31 @@ export default class Game {
         }
 
         if (this.gameState === "PLAYING") {
-            // Final mode: live finalist counts (elim list can drift after multi-exit)
-            if (this.isFinalMode) {
-                const totalN = Math.max(
-                    this._finalTotalCount || 0,
-                    (this._finalists?.length ?? 0) + (this._finalEliminated?.length ?? 0),
-                    1
-                );
-                const aliveN = Math.max(
-                    this._finalists?.length ?? 0,
-                    this.flagManager?.flags?.length ?? 0
-                );
-                const fakeElim = new Array(Math.max(0, totalN - aliveN)).fill({});
-                if (this._finalEliminated?.length) {
-                    fakeElim[fakeElim.length - 1] =
-                        this._finalEliminated[this._finalEliminated.length - 1];
-                }
-                this.progressBarRenderer.draw(
-                    ctx, fakeElim, totalN,
-                    this.layout.barCenterX, this.layout.barY,
-                    this.layout.barWidth, this.layout.barHeight
-                );
-            } else {
-                this.progressBarRenderer.draw(
-                    ctx,
-                    this.eliminationManager?.eliminated ?? [],
-                    this.totalCountries,
-                    this.layout.barCenterX, this.layout.barY,
-                    this.layout.barWidth, this.layout.barHeight
-                );
-            }
+            // Final mode: use finalist totals so the bar never goes negative
+            // after simultaneous multi-exits / recovery.
+            const elimList = this.isFinalMode
+                ? this._finalEliminated
+                : (this.eliminationManager?.eliminated ?? []);
+            const totalN = this.isFinalMode
+                ? (this._finalTotalCount || this.totalCountries)
+                : this.totalCountries;
+            this.progressBarRenderer.draw(
+                ctx,
+                elimList,
+                totalN,
+                this.layout.barCenterX, this.layout.barY,
+                this.layout.barWidth,   this.layout.barHeight
+            );
         }
 
         // Bottom tray
         if (this.isFinalMode) {
             const finalTrayH = Math.min(100, this._lh * 0.13);
-            const liveFlags = this.flagManager?.flags ?? [];
             this.finalBottomRenderer.draw(
                 ctx,
-                liveFlags,
+                this.flagManager.flags,
                 this._finalEliminated,
-                this._finalTotalCount || (liveFlags.length + (this._finalEliminated?.length ?? 0)),
+                this._finalTotalCount,
                 this._lw, this._lh, finalTrayH
             );
         } else if (this.gameState !== "NEXT_EVENT") {
@@ -2625,26 +1891,13 @@ export default class Game {
             const elapsed = Date.now() - this.winnerDisplayTime;
             const animT   = this.gameState === "WINNER_SHOW"
                 ? Math.min(1, elapsed / 450) : 1;
-
-            // Compute seconds remaining until next round starts.
-            // restartTimer is a setTimeout handle — we can't read it directly,
-            // so we store the target time when we set the timer.
-            // Show "NEXT ROUND IN Xs" only for long holds (40-min round winner ~60s).
-            // Hide it on normal ~3.5s arena-win screens (esp. Highest Winner Wins).
-            let secsRemain = null;
-            if (this._winnerTimerEndsAt && this.gameState === "WINNER_SHOW") {
-                const left = Math.max(0, (this._winnerTimerEndsAt - Date.now()) / 1000);
-                if (left > 5) secsRemain = left;
-            }
-
             this.winnerRender.draw(
                 ctx, this.winnerManager.winner,
                 this._lw, this._lh,
                 this.gameState === "COUNTDOWN",
                 animT,
                 this.layout.arenaX, this.layout.arenaY, this.layout.arenaRadius,
-                false, 0,
-                secsRemain
+                false, 0
             );
         }
 
@@ -3092,8 +2345,10 @@ export default class Game {
         if (this.isFinalMode) {
             const n = this._finalists?.length ?? 0;
             line = narrow
-                ? `ELIM ROUND  ·  ${n} FLAGS`
-                : `ELIMINATION ROUND  ·  ${n} FLAGS`;
+                ? `ELIM  ·  ${n} FLAGS`
+                : (medium
+                    ? `ELIMINATION  ·  EARTHQUAKE  ·  ${n} FLAGS`
+                    : `ELIMINATION  ·  EARTHQUAKE  ·  ${n} FLAGS`);
         } else if (this.sessionStartTime > 0) {
             const elapsed   = Date.now() - this.sessionStartTime;
             const remaining = Math.max(0, this.QUALIFY_DURATION_MS - elapsed);
@@ -3119,7 +2374,7 @@ export default class Game {
                     const n = this._finalists?.length ?? 0;
                     line = narrow
                         ? `GRAND FINAL  ·  ${n}`
-                        : `GRAND FINAL  ·  ${n} FLAGS  ·  ELIMINATION ROUND`;
+                        : `GRAND FINAL  ·  ${n} FLAGS  ·  EARTHQUAKE`;
                 } else if (narrow) {
                     line = `${segLabel}  ${segClock}  ·  ${topLabel}`;
                 } else if (medium) {
@@ -3178,22 +2433,11 @@ export default class Game {
     }
 
     _drawNextEventOverlay(ctx) {
-        // ── 5H Grand Final: full-page cinematic elimination screen ───────────
-        // Triggered only when the 5H Championship enters its Grand Final
-        // (after round 8). Replaces the normal card with a full-screen
-        // crimson/ember design. Everything else in draw() is untouched.
-        if (this.isFinalMode && this.isLongBattleMode) {
-            this._drawGrandFinalCinematic(ctx);
-            return;
-        }
-        // ─────────────────────────────────────────────────────────────────────
-
         const ev    = this.eventManager;
         const cx    = this._lw / 2;
         const cy    = this.layout.arenaY;
         const total = this.nextEventDuration;
         const timer = this.nextEventTimer;
-        const ui    = themeUI(this.theme);
 
         let alpha = 1;
         if (timer < 14)              alpha = this._easeOut(timer / 14);
@@ -3202,7 +2446,7 @@ export default class Game {
 
         ctx.save();
         ctx.globalAlpha = alpha;
-        ctx.fillStyle   = ui.overlay;
+        ctx.fillStyle   = "rgba(5, 8, 22, 0.55)";
         ctx.fillRect(0, 0, this._lw, this._lh);
         ctx.translate(cx, cy);
         ctx.scale(scale, scale);
@@ -3213,346 +2457,101 @@ export default class Game {
         const cardX = cx - cardW / 2;
         const cardY = cy - cardH / 2;
 
-        // Theme panel
-        const pg = ctx.createLinearGradient(cardX, cardY, cardX, cardY + cardH);
-        pg.addColorStop(0, ui.panel);
-        pg.addColorStop(1, ui.panelDeep);
-        ctx.fillStyle = pg;
+        // Dark-blue broadcast panel
+        ctx.fillStyle = "#101D38";
         ctx.beginPath();
-        if (typeof ctx.roundRect === "function") ctx.roundRect(cardX, cardY, cardW, cardH, 14);
+        if (typeof ctx.roundRect === "function") ctx.roundRect(cardX, cardY, cardW, cardH, 12);
         else ctx.rect(cardX, cardY, cardW, cardH);
         ctx.fill();
-        ctx.strokeStyle = ui.border;
-        ctx.lineWidth   = 1.6;
+        // Electric-blue border (event badge style)
+        ctx.strokeStyle = "#2E62E8";
+        ctx.lineWidth   = 1.5;
         ctx.stroke();
 
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
+
         ctx.shadowBlur = 0;
 
         const titleSize = Math.min(this._lw * 0.028, 22);
         ctx.font = gf(800, titleSize);
-        ctx.fillStyle = ui.title;
+        ctx.fillStyle = "#38D5FF";
         ctx.fillText(this.isFinalMode ? "ELIMINATION" : "NEXT BATTLE", cx, cy - cardH * 0.28);
 
         const pulse    = 1 + 0.04 * Math.sin(timer * 0.1);
         const iconSize = Math.min(this._lw * 0.08, 52) * pulse;
         ctx.font       = `${iconSize}px system-ui, Apple Color Emoji, sans-serif`;
-        ctx.fillText(this.isFinalMode ? "🌋" : (ev.icon || "🏁"), cx, cy - 4);
+        ctx.shadowBlur = 0;
+        ctx.fillText(this.isFinalMode ? "🌋" : ev.icon, cx, cy - 4);
 
+        // Event name badge strip
         const eventSize = Math.min(this._lw * 0.048, 36);
         ctx.font = gf(900, eventSize);
-        ctx.fillStyle = this.isFinalMode ? "#FFC83D" : ui.text;
+        ctx.fillStyle   = this.isFinalMode ? "#FFC83D" : "#F4F7FF";
+
+        ctx.shadowBlur = 0;
         ctx.fillText(
-            this.isFinalMode ? `ELIMINATION ROUND  ·  ${this._finalists.length} FLAGS` : (ev.name || ""),
+            this.isFinalMode ? `EARTHQUAKE  ·  ${this._finalists.length} FLAGS` : ev.name,
             cx, cy + cardH * 0.28
         );
         ctx.restore();
     }
 
-    // ── 5H Grand Final Cinematic ─────────────────────────────────────────────
-    // Full-page crimson/ember elimination screen shown only when the 5H
-    // Championship transitions from round 8 → Grand Final elimination.
-    //
-    // What it shows:
-    //   - Full-screen deep crimson radial background overlay
-    //   - Large arena circle centred on screen
-    //   - All N finalist flags arranged in a rotating ring inside the circle
-    //   - "FINAL ELIMINATION ROUND" title above the circle
-    //   - Subtle subtitle with country count
-    //   - Audio cue: "Final elimination battle will be fought between N countries — [names]!"
-    //
-    // What it does NOT show:
-    //   - No leaderboard  (still rendered behind but fully covered)
-    //   - No bottom tray  (this is NEXT_EVENT so existing code already skips it)
-    //   - No countdown number
-    //   - No event name / "NEXT BATTLE" label
-    //   - No round winner
-    //
-    _drawGrandFinalCinematic(ctx) {
-        const now   = performance.now();
-        const timer = this.nextEventTimer;   // frames elapsed
-        const total = this.nextEventDuration;
-
-        // Fade in / fade out envelope
-        let alpha = 1;
-        if (timer < 18)              alpha = this._easeOut(timer / 18);
-        else if (timer > total - 20) alpha = this._easeOut((total - timer) / 20);
-        alpha = Math.max(0, Math.min(1, alpha));
-
-        const cx = this._lw / 2;
-        const cy = this._lh / 2;
-
-        // ── Speak once on first frame ─────────────────────────────────────────
-        // Audio: announce country COUNT only — do NOT list each name individually
-        if (timer <= 1 && !this._gfCinematicSpoken) {
-            this._gfCinematicSpoken = true;
-            const n = this._finalists?.length ?? 0;
-            this.audio.speak(
-                `The Final Elimination Round is about to begin! ` +
-                `${n} countr${n === 1 ? "y" : "ies"} will compete — last flag standing wins the championship!`
-            );
-        }
-
-        ctx.save();
-        ctx.globalAlpha = alpha;
-
-        // ── Full-page ember/crimson overlay ───────────────────────────────────
-        const bgGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(this._lw, this._lh) * 0.75);
-        bgGrad.addColorStop(0,   "rgba(55, 8, 8, 0.84)");
-        bgGrad.addColorStop(0.55, "rgba(32, 4, 6, 0.90)");
-        bgGrad.addColorStop(1,   "rgba(8, 1, 3, 0.96)");
-        ctx.fillStyle = bgGrad;
-        ctx.fillRect(0, 0, this._lw, this._lh);
-
-        // ── Arena circle sizing — large, centred ──────────────────────────────
-        const R = Math.min(this._lw, this._lh) * 0.40;
-        const pulse = 1 + 0.022 * Math.sin(now * 0.0014);
-        const pR = R * pulse;
-
-        // ── Ambient outer glow ────────────────────────────────────────────────
-        const outerGlow = ctx.createRadialGradient(cx, cy, pR * 0.65, cx, cy, pR * 1.4);
-        outerGlow.addColorStop(0,   "rgba(210, 50, 15, 0.20)");
-        outerGlow.addColorStop(0.6, "rgba(160, 25, 8,  0.08)");
-        outerGlow.addColorStop(1,   "rgba(0,0,0,0)");
-        ctx.fillStyle = outerGlow;
-        ctx.beginPath();
-        ctx.arc(cx, cy, pR * 1.4, 0, Math.PI * 2);
-        ctx.fill();
-
-        // ── Slow rotating ember rays ──────────────────────────────────────────
-        if (!this._gfRayAngle) this._gfRayAngle = 0;
-        this._gfRayAngle += 0.0025;
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate(this._gfRayAngle);
-        const rayCount = 8;
-        for (let i = 0; i < rayCount; i++) {
-            const ang  = (i / rayCount) * Math.PI * 2;
-            const half = Math.PI / rayCount * 0.65;
-            ctx.beginPath();
-            ctx.moveTo(Math.cos(ang - half) * pR * 0.15, Math.sin(ang - half) * pR * 0.15);
-            ctx.lineTo(Math.cos(ang) * pR * 1.1, Math.sin(ang) * pR * 1.1);
-            ctx.lineTo(Math.cos(ang + half) * pR * 0.15, Math.sin(ang + half) * pR * 0.15);
-            ctx.closePath();
-            ctx.globalAlpha = (i % 2 === 0 ? 0.12 : 0.06) * alpha;
-            ctx.fillStyle   = i % 2 === 0 ? "#B82010" : "#701010";
-            ctx.fill();
-        }
-        ctx.restore();
-        ctx.globalAlpha = alpha;
-
-        // ── Emanating concentric rings ─────────────────────────────────────────
-        if (!this._gfRingPhase) this._gfRingPhase = 0;
-        this._gfRingPhase = (this._gfRingPhase + 0.010) % 1;
-        for (let r = 0; r < 4; r++) {
-            const phase  = (this._gfRingPhase + r / 4) % 1;
-            const radius = pR * 0.08 + pR * 0.98 * phase;
-            const rAlpha = (1 - phase) * 0.28 * alpha;
-            ctx.beginPath();
-            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(210, 60, 15, ${rAlpha})`;
-            ctx.lineWidth   = Math.max(0.5, (1 - phase) * 2.6);
-            ctx.stroke();
-        }
-
-        // ── Arena circle interior ─────────────────────────────────────────────
-        const arenaFill = ctx.createRadialGradient(cx, cy, 0, cx, cy, pR);
-        arenaFill.addColorStop(0,    "rgba(24, 3, 3, 0.97)");
-        arenaFill.addColorStop(0.75, "rgba(14, 1, 1, 0.98)");
-        arenaFill.addColorStop(1,    "rgba(6, 0, 0, 0.99)");
-        ctx.fillStyle = arenaFill;
-        ctx.beginPath();
-        ctx.arc(cx, cy, pR, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Thick crimson border ring
-        ctx.beginPath();
-        ctx.arc(cx, cy, pR, 0, Math.PI * 2);
-        ctx.strokeStyle = "#C03018";
-        ctx.lineWidth   = Math.max(3, pR * 0.020);
-        ctx.shadowColor = "rgba(200, 50, 15, 0.95)";
-        ctx.shadowBlur  = 24;
-        ctx.stroke();
-        // Thin outer ember halo
-        ctx.shadowBlur  = 0;
-        ctx.beginPath();
-        ctx.arc(cx, cy, pR + Math.max(4, pR * 0.032), 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(255, 110, 35, 0.28)";
-        ctx.lineWidth   = Math.max(1, pR * 0.009);
-        ctx.stroke();
-
-        // ── Finalist flags in rotating orbit inside the circle ────────────────
-        const finalists  = this._finalists ?? [];
-        const flagCount  = finalists.length;
-        if (flagCount > 0) {
-            const flagRingR  = pR * 0.68;
-            const baseAngle  = -Math.PI / 2;                // start at top
-            const rotOffset  = now * 0.00015;               // very slow rotation
-            const arcPerFlag = (2 * Math.PI) / flagCount;
-            const maxFlagW   = Math.min(pR * 0.26, 78);
-            const minFlagW   = Math.max(14, pR * 0.075);
-            const flagW      = Math.max(minFlagW, Math.min(maxFlagW, flagRingR * arcPerFlag * 0.50));
-            const flagH      = flagW * 0.65;
-
-            for (let i = 0; i < flagCount; i++) {
-                const country = finalists[i]?.country;
-                if (!country) continue;
-                const ang = baseAngle + rotOffset + (i / flagCount) * Math.PI * 2;
-                const fx  = cx + Math.cos(ang) * flagRingR;
-                const fy  = cy + Math.sin(ang) * flagRingR;
-
-                ctx.save();
-                ctx.translate(fx, fy);
-                const wobble = Math.sin(now * 0.0016 + i * 1.3) * 0.055;
-                ctx.rotate(wobble);
-
-                const img = country.image
-                    ?? (this.flagLoader ? this.flagLoader.load(country.code) : null);
-
-                const pad = Math.max(2, flagW * 0.055);
-                ctx.fillStyle   = "rgba(8, 1, 1, 0.78)";
-                ctx.strokeStyle = "rgba(190, 45, 28, 0.75)";
-                ctx.lineWidth   = 1.3;
-                const rx = -flagW / 2 - pad;
-                const ry = -flagH / 2 - pad;
-                const rw = flagW + pad * 2;
-                const rh = flagH + pad * 2;
-                if (typeof ctx.roundRect === "function") ctx.roundRect(rx, ry, rw, rh, 4);
-                else ctx.rect(rx, ry, rw, rh);
-                ctx.fill();
-                ctx.stroke();
-
-                if (img) {
-                    try {
-                        ctx.shadowColor = "rgba(190, 45, 20, 0.50)";
-                        ctx.shadowBlur  = 10;
-                        ctx.imageSmoothingEnabled = true;
-                        ctx.imageSmoothingQuality = "high";
-                        ctx.drawImage(img, -flagW / 2, -flagH / 2, flagW, flagH);
-                        ctx.shadowBlur = 0;
-                    } catch (_) {
-                        // Image not yet decoded — shows placeholder box, loads next frame
-                        ctx.shadowBlur = 0;
-                    }
-                }
-
-                // Country name label below each flag
-                if (country.name) {
-                    const nameSize = Math.max(7, Math.min(flagW * 0.28, 13));
-                    ctx.font = gf(700, nameSize);
-                    ctx.textAlign    = "center";
-                    ctx.textBaseline = "top";
-                    ctx.shadowBlur   = 6;
-                    ctx.shadowColor  = "rgba(0,0,0,0.85)";
-                    ctx.fillStyle    = "rgba(255, 200, 140, 0.92)";
-                    // Keep the label de-rotated relative to the wobble so it reads straight
-                    ctx.save();
-                    ctx.rotate(-wobble); // cancel the wobble for text
-                    ctx.fillText(country.name, 0, flagH / 2 + 5);
-                    ctx.restore();
-                    ctx.shadowBlur = 0;
-                }
-
-                ctx.restore();
-            }
-        }
-
-        // ── "FINAL ELIMINATION ROUND" title above the circle ─────────────────
-        const textY = cy - pR - Math.max(16, pR * 0.075);
-
-        ctx.save();
-        ctx.textAlign    = "center";
-        ctx.textBaseline = "bottom";
-        ctx.shadowBlur   = 0;
-
-        // Main title — amber/orange gradient
-        const titleSize = Math.min(this._lw * 0.052, 42, pR * 0.17);
-        ctx.font = gf(900, titleSize);
-
-        const titleGrad = ctx.createLinearGradient(cx - 200, 0, cx + 200, 0);
-        titleGrad.addColorStop(0,    "#FF5820");
-        titleGrad.addColorStop(0.38, "#FFA030");
-        titleGrad.addColorStop(0.62, "#FFB840");
-        titleGrad.addColorStop(1,    "#FF5820");
-        ctx.fillStyle   = titleGrad;
-        ctx.shadowColor = "rgba(210, 55, 10, 0.90)";
-        ctx.shadowBlur  = 18;
-        ctx.fillText("FINAL ELIMINATION ROUND", cx, textY);
-
-        // Subtitle — country count
-        const subSize = Math.min(this._lw * 0.026, 17, pR * 0.085);
-        ctx.font = gf(600, subSize);
-        ctx.fillStyle   = "rgba(255, 135, 70, 0.68)";
-        ctx.shadowColor = "rgba(170, 35, 8, 0.55)";
-        ctx.shadowBlur  = 8;
-        ctx.fillText(
-            `${finalists.length} COUNTRIES  ·  LAST FLAG STANDING`,
-            cx, textY - titleSize - 5
-        );
-
-        ctx.restore();
-        ctx.restore(); // globalAlpha
-    }
-    // ── End 5H Grand Final Cinematic ─────────────────────────────────────────
-
     _drawCountdownOverlay(ctx) {
-        // 5H Grand Final: reuse the same cinematic (no countdown number shown)
-        if (this.isFinalMode && this.isLongBattleMode) {
-            this._drawGrandFinalCinematic(ctx);
-            return;
-        }
-
         if (this.restartCountdown <= 0) return;
         const cx = this._lw / 2;
         const cy = this.layout.arenaY;
         const ev = this.eventManager;
-        const ui = themeUI(this.theme);
+
+        if (!this._countdownTickStart) this._countdownTickStart = performance.now();
+        const tickT    = ((performance.now() - this._countdownTickStart) % 1000) / 1000;
+        const numScale = tickT < 0.2 ? 1 + 0.16 * (1 - tickT / 0.2) : 1;
 
         ctx.save();
         ctx.textAlign    = "center";
         ctx.textBaseline = "middle";
+
         ctx.shadowBlur = 0;
 
-        // Soft theme dim
-        ctx.fillStyle = ui.overlay;
-        ctx.fillRect(0, 0, this._lw, this._lh);
-
+        // Broadcast transition label
         const labelSize = Math.min(this._lw * 0.045, 28);
         ctx.font = gf(800, labelSize);
-        ctx.fillStyle = ui.title;
-        ctx.fillText("NEXT BATTLE", cx, cy - 70);
+        ctx.fillStyle   = "#38D5FF";
 
-        // Event badge — theme panel
-        const badgeW = Math.min(this._lw * 0.55, 300);
-        const badgeH = Math.min(this._lh * 0.06, 40);
+        ctx.shadowBlur = 0;
+        ctx.fillText("NEXT BATTLE", cx, cy - 100);
+
+        // Event badge — dark-blue panel with electric-blue border
+        const badgeW = Math.min(this._lw * 0.55, 280);
+        const badgeH = Math.min(this._lh * 0.055, 36);
         const badgeX = cx - badgeW / 2;
-        const badgeY = cy - 28;
-        const bg = ctx.createLinearGradient(badgeX, badgeY, badgeX, badgeY + badgeH);
-        bg.addColorStop(0, ui.panel);
-        bg.addColorStop(1, ui.panelDeep);
-        ctx.fillStyle = bg;
+        const badgeY = cy - 72;
+        ctx.fillStyle = "#101D38";
         ctx.beginPath();
-        if (typeof ctx.roundRect === "function") ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 10);
+        if (typeof ctx.roundRect === "function") ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 8);
         else ctx.rect(badgeX, badgeY, badgeW, badgeH);
         ctx.fill();
-        ctx.strokeStyle = ui.border;
-        ctx.lineWidth   = 1.6;
+        ctx.strokeStyle = "#2E62E8";
+        ctx.lineWidth   = 1.5;
         ctx.stroke();
 
         const evNameSize = Math.min(this._lw * 0.038, 20);
         ctx.font = gf(700, evNameSize);
-        ctx.fillStyle = ui.text;
+        ctx.fillStyle   = "#F4F7FF";
+        ctx.shadowBlur = 0;
         ctx.fillText(
             this.isFinalMode
-                ? `⚔️  ELIMINATION ROUND  ·  ${this._finalists.length} FLAGS`
-                : `${ev.icon || ""}  ${ev.name || ""}`,
+                ? `🌋  EARTHQUAKE  ·  ${this._finalists.length} FLAGS`
+                : `${ev.icon}  ${ev.name}`,
             cx, badgeY + badgeH / 2
         );
 
+        // Flag count metadata
         const countSize = Math.min(this._lw * 0.032, 18);
         ctx.font = gf(600, countSize);
-        ctx.fillStyle = ui.muted;
+        ctx.fillStyle   = "#91A7C9";
+
+        ctx.shadowBlur = 0;
         ctx.fillText(
             this.isFinalMode
                 ? "ELIMINATION ROUND"
@@ -3561,10 +2560,39 @@ export default class Game {
                 : this.isHighestWinsMode
                     ? "HIGHEST WINNER WINS"
                     : `${this.totalCountries}-COUNTRY FLAGS BATTLE`,
-            cx, cy + 40
+            cx, cy - 22
         );
 
-        // No big countdown number — timer still runs in logic
+        // Countdown number — white + subtle blue glow + blue border ring
+        ctx.save();
+        ctx.translate(cx, cy + 55);
+        ctx.scale(numScale, numScale);
+        const numSize = Math.min(this._lw * 0.18, 110);
+
+        // Soft blue ring behind number
+        const ringR = numSize * 0.72;
+        ctx.beginPath();
+        ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(46, 98, 232, 0.55)";
+        ctx.lineWidth   = 2.5;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(0, 0, ringR + 6, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(61, 124, 255, 0.20)";
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+
+        ctx.font = gf(900, numSize);
+        ctx.fillStyle   = "#F4F7FF";
+
+        ctx.shadowBlur = 0;
+        ctx.fillText(String(this.restartCountdown), 0, 0);
+        // Subtle blue glow pass
+
+        ctx.shadowBlur = 0;
+        ctx.fillText(String(this.restartCountdown), 0, 0);
+        ctx.restore();
+
         ctx.restore();
     }
 
@@ -3596,14 +2624,12 @@ export default class Game {
         const cy     = this.layout.arenaY;
         const R      = this.layout.arenaRadius;
 
-        const ui = themeUI(this.theme);
-
-        // Soft theme pad behind the card
+        // Soft dark pad behind the card so text/flag read clearly
         ctx.save();
-        ctx.globalAlpha = alpha * 0.50;
-        ctx.fillStyle   = ui.panelDeep;
+        ctx.globalAlpha = alpha * 0.45;
+        ctx.fillStyle   = "#050816";
         ctx.beginPath();
-        ctx.arc(cx, cy, R * 0.52, 0, Math.PI * 2);
+        ctx.arc(cx, cy, R * 0.50, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
 
@@ -3613,25 +2639,32 @@ export default class Game {
         ctx.scale(scale, scale);
         ctx.translate(-cx, -cy);
 
+        // Use TOP baseline so stacked elements never overlap
         ctx.textAlign    = "center";
         ctx.textBaseline = "top";
+
         ctx.shadowBlur = 0;
 
+        // Vertical stack (clear separation, video match):
+        //   ELIMINATED
+        //   [ FLAG ]
+        //   COUNTRY NAME
+        //   N FLAGS LEFT
         const elimSize = Math.min(R * 0.12, 26);
         const flagH    = Math.min(R * 0.28, 80);
-        const flagW    = Math.round(flagH * 1.5);
+        const flagW    = Math.round(flagH * 1.5);  // standard 3:2 flag ratio
         const nameSize = Math.min(R * 0.10, 20);
         const remSize  = Math.min(R * 0.07, 15);
-        const gap1     = Math.max(12, R * 0.05);
-        const gap2     = Math.max(14, R * 0.055);
-        const gap3     = Math.max(8,  R * 0.035);
+        const gap1     = Math.max(12, R * 0.05);  // ELIMINATED → flag
+        const gap2     = Math.max(14, R * 0.055); // flag → name (clear gap)
+        const gap3     = Math.max(8,  R * 0.035); // name → count
 
         const totalH = elimSize + gap1 + flagH + gap2 + nameSize + gap3 + remSize;
         let y = cy - totalH / 2;
 
         // ELIMINATED
         ctx.font      = gf(900, elimSize);
-        ctx.fillStyle = "#FF6B8A";
+        ctx.fillStyle = "#FF5368";
         ctx.fillText("ELIMINATED", cx, y);
         y += elimSize + gap1;
 
@@ -3642,6 +2675,7 @@ export default class Game {
 
         if (img && img.complete && img.naturalWidth > 0) {
             ctx.save();
+
             ctx.shadowBlur = 0;
             ctx.beginPath();
             if (typeof ctx.roundRect === "function") {
@@ -3649,7 +2683,7 @@ export default class Game {
             } else {
                 ctx.rect(flagX - 2, flagY - 2, flagW + 4, flagH + 4);
             }
-            ctx.fillStyle = ui.panel;
+            ctx.fillStyle = "#101D38";
             ctx.fill();
             ctx.beginPath();
             if (typeof ctx.roundRect === "function") {
@@ -3660,8 +2694,8 @@ export default class Game {
             ctx.clip();
             ctx.drawImage(img, flagX, flagY, flagW, flagH);
             ctx.restore();
-            ctx.strokeStyle = ui.border;
-            ctx.lineWidth   = 2.2;
+            ctx.strokeStyle = "rgba(255,255,255,0.65)";
+            ctx.lineWidth   = 2.5;
             if (typeof ctx.roundRect === "function") {
                 ctx.beginPath();
                 ctx.roundRect(flagX, flagY, flagW, flagH, 4);
@@ -3670,14 +2704,14 @@ export default class Game {
                 ctx.strokeRect(flagX, flagY, flagW, flagH);
             }
         } else {
-            ctx.fillStyle = ui.panelDeep;
+            ctx.fillStyle = "#172B50";
             ctx.fillRect(flagX, flagY, flagW, flagH);
         }
         y += flagH + gap2;
 
         // Country name — clearly BELOW the flag
         ctx.font      = gf(800, nameSize);
-        ctx.fillStyle = ui.text;
+        ctx.fillStyle = "#F4F7FF";
         ctx.shadowBlur = 0;
         let name = (item.country?.name ?? "").toUpperCase();
         while (name.length > 2 && ctx.measureText(name).width > R * 1.4) {
@@ -3740,7 +2774,7 @@ export default class Game {
         const titleSize = Math.min(R * 0.11, 24);
         ctx.font = gf(900, titleSize);
         ctx.fillStyle = "#F4F7FF";
-        ctx.fillText("ELIMINATION ROUND", cx, cy - titleSize * 0.35);
+        ctx.fillText("EARTHQUAKE", cx, cy - titleSize * 0.35);
 
         const subSize = Math.min(R * 0.075, 16);
         ctx.font = gf(700, subSize);
@@ -4026,48 +3060,30 @@ export default class Game {
         const pulse = 0.5 + 0.5 * Math.sin(t * 1.1);
         const name = (this._grandChampion?.name ?? "").toUpperCase();
 
-        // ── Theme-aware palette ─────────────────────────────────────────────
-        const ui        = themeUI(this.theme);
-        const isSpace   = this.theme?.id === 'space';
-        // Background: theme deep panel colour
-        const bgBase    = ui.panelDeep;
-        // Radial mid-glow: derived from theme glow rgb
-        const glowRgb   = ui.glow;                          // e.g. '160, 120, 255'
-        // Ray colour: theme accent rays
-        const rayCol1   = ui.ray1;                          // e.g. 'rgba(160,120,255,1)'
-        const rayCol2   = ui.ray2;
-        // Ring stroke
-        const ringStroke = ui.border;
-        // Title / win text
-        const goldCol   = isSpace ? '#C8A0FF' : '#FFC83D';  // lavender-gold in space
-        // Card bg
-        const cardBg    = ui.panel;
-        // Countdown muted text
-        const mutedCol  = ui.muted;
-
-        // Full background
-        ctx.fillStyle = bgBase;
+        // Midnight navy full background
+        ctx.fillStyle = "#050816";
         ctx.fillRect(0, 0, cw, ch);
 
         // Soft radial glow behind the arena
         const bgGrad = ctx.createRadialGradient(ax, ay, R * 0.15, ax, ay, R * 1.35);
-        bgGrad.addColorStop(0,    `rgba(${glowRgb}, 0.28)`);
-        bgGrad.addColorStop(0.55, `rgba(${glowRgb}, 0.07)`);
-        bgGrad.addColorStop(1,    `rgba(${glowRgb}, 0)`);
+        bgGrad.addColorStop(0, "rgba(32, 59, 104, 0.55)");
+        bgGrad.addColorStop(0.55, "rgba(10, 18, 38, 0.9)");
+        bgGrad.addColorStop(1, "rgba(5, 8, 22, 1)");
         ctx.fillStyle = bgGrad;
         ctx.fillRect(0, 0, cw, ch);
 
-        // Arena ring — theme border colour
+        // Arena ring
         ctx.save();
         ctx.beginPath();
         ctx.arc(ax, ay, R, 0, Math.PI * 2);
-        ctx.strokeStyle = ringStroke;
+        ctx.strokeStyle = "rgba(244, 247, 255, 0.85)";
         ctx.lineWidth = 3;
+
         ctx.shadowBlur = 0;
         ctx.stroke();
         ctx.restore();
 
-        // Theme rays inside the circle
+        // Gold rays inside the circle (reference: TIME UP — CHAMPION screen)
         ctx.save();
         ctx.beginPath();
         ctx.arc(ax, ay, R * 0.98, 0, Math.PI * 2);
@@ -4078,56 +3094,27 @@ export default class Game {
         for (let i = 0; i < 18; i++) {
             const angle = (i / 18) * Math.PI * 2;
             const hw = i % 2 === 0 ? Math.PI / 18 * 0.85 : Math.PI / 18 * 0.35;
-            const rayAlpha = (i % 2 === 0 ? 0.28 : 0.12) + pulse * 0.06;
+            const rayAlpha = (i % 2 === 0 ? 0.22 : 0.10) + pulse * 0.06;
             ctx.beginPath();
             ctx.moveTo(Math.cos(angle - hw) * R * 0.08, Math.sin(angle - hw) * R * 0.08);
             ctx.lineTo(Math.cos(angle) * rayR, Math.sin(angle) * rayR);
             ctx.lineTo(Math.cos(angle + hw) * R * 0.08, Math.sin(angle + hw) * R * 0.08);
             ctx.closePath();
-            ctx.fillStyle = i % 2 === 0 ? rayCol1.replace(/,[\d.]+\)$/, `,${rayAlpha})`) : rayCol2.replace(/,[\d.]+\)$/, `,${rayAlpha})`);
+            ctx.fillStyle = `rgba(255, 200, 61, ${rayAlpha})`;
             ctx.fill();
         }
-
-        // Space theme: emanating concentric rings (matches WinnerRenderer space look)
-        if (isSpace) {
-            const ringCount = 4;
-            for (let r = 0; r < ringCount; r++) {
-                const phase  = ((t * 0.5 + r / ringCount) % 1);
-                const radius = R * 0.10 + R * 0.85 * phase;
-                const alpha  = (1 - phase) * 0.32;
-                ctx.beginPath();
-                ctx.arc(0, 0, radius, 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(${glowRgb},${alpha})`;
-                ctx.lineWidth   = Math.max(0.5, (1 - phase) * 3.0);
-                ctx.stroke();
-            }
-        }
         ctx.restore();
-
-        // Central glow behind flag position (space: purple, classic: blue-gold)
-        const glowGr = ctx.createRadialGradient(ax, ay, 0, ax, ay, R * 0.40);
-        glowGr.addColorStop(0,   `rgba(${glowRgb}, ${0.45 + pulse * 0.12})`);
-        glowGr.addColorStop(0.5, `rgba(${glowRgb}, 0.18)`);
-        glowGr.addColorStop(1,   `rgba(${glowRgb}, 0)`);
-        ctx.fillStyle = glowGr;
-        ctx.beginPath();
-        ctx.arc(ax, ay, R * 0.40, 0, Math.PI * 2);
-        ctx.fill();
 
         // TOP 1 badge above the ring
         ctx.save();
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
+
         ctx.shadowBlur = 0;
         const topSize = Math.min(R * 0.085, 17);
         ctx.font = gf(800, topSize);
-        // Badge above ring: cyan-white accent (distinct from gold title below)
-        ctx.fillStyle = isSpace ? '#C8A0FF' : '#38D5FF';
-        if (this._champHwRound) {
-            ctx.fillText(`HIGHEST WINNER WINS  ·  ${name || "CHAMPION"}`, ax, ay - R - topSize * 2.2);
-        } else {
-            ctx.fillText(`TOP 1  ·  ${name || "CHAMPION"}`, ax, ay - R - topSize * 2.2);
-        }
+        ctx.fillStyle = "#FFC83D";
+        ctx.fillText(`TOP 1  ·  ${name || "CHAMPION"}`, ax, ay - R - topSize * 2.2);
 
         // Vertical stack INSIDE the circle (reference stream):
         //   🏆
@@ -4155,23 +3142,21 @@ export default class Game {
 
         let y = ay - stackH / 2;
 
-        // Trophy emoji — warm gold
+        // Trophy emoji
         ctx.font = gf(900, trophySize);
-        ctx.fillStyle = goldCol;
+        ctx.fillStyle = "#FFC83D";
+
         ctx.shadowBlur = 0;
         ctx.fillText("🏆", ax, y);
         y += trophySize + gap * 0.5;
 
-        // Title: bright white with slight warmth (clearly different from gold emoji/wins)
+        // Title: 5H Grand Final vs generic Time-Up champion
         ctx.font = gf(900, titleSize);
-        ctx.fillStyle = isSpace ? '#E8D8FF' : '#FFFFFF';
+        ctx.fillStyle = "#FFC83D";
         ctx.shadowBlur = 0;
-        let champTitle = "TIME UP  —  CHAMPION";
-        if (this._champHwRound) {
-            champTitle = "TIME UP  —  CHAMPION";
-        } else if ((this.sessionMode && this.sessionMode.inGrandFinal) || this._currentEventId === "long_battle") {
-            champTitle = "5H GRAND FINAL CHAMPION";
-        }
+        const champTitle = (this.sessionMode && this.sessionMode.inGrandFinal) || this._currentEventId === "long_battle"
+            ? "5H GRAND FINAL CHAMPION"
+            : "TIME UP  —  CHAMPION";
         ctx.fillText(champTitle, ax, y);
         y += titleSize + gap;
 
@@ -4181,7 +3166,7 @@ export default class Game {
         const pad = Math.max(4, flagW * 0.04);
 
         ctx.shadowBlur = 0;
-        ctx.fillStyle = cardBg;
+        ctx.fillStyle = "#101D38";
         ctx.beginPath();
         if (typeof ctx.roundRect === "function") {
             ctx.roundRect(flagX - pad, flagY - pad, flagW + pad * 2, flagH + pad * 2, 8);
@@ -4189,7 +3174,7 @@ export default class Game {
             ctx.rect(flagX - pad, flagY - pad, flagW + pad * 2, flagH + pad * 2);
         }
         ctx.fill();
-        ctx.strokeStyle = `rgba(${glowRgb}, ${0.55 + pulse * 0.25})`;
+        ctx.strokeStyle = `rgba(255, 200, 61, ${0.55 + pulse * 0.25})`;
         ctx.lineWidth = 2;
         ctx.stroke();
 
@@ -4211,7 +3196,7 @@ export default class Game {
         }
         y += flagH + gap;
 
-        // Country name — bright white (most prominent text after title)
+        // Country name — clearly below the flag
         ctx.font = gf(800, nameSize);
         ctx.fillStyle = "#F4F7FF";
 
@@ -4223,25 +3208,19 @@ export default class Game {
         ctx.fillText(displayName, ax, y);
         y += nameSize + gap * 0.75;
 
-        // Win count — warm orange-gold (distinct from the pure-gold trophy/title)
+        // 1 WIN
         ctx.font = gf(800, winSize);
-        ctx.fillStyle = isSpace ? '#FFB347' : '#FF9A3C';
+        ctx.fillStyle = "#FFC83D";
         ctx.shadowBlur = 0;
-        const winN = this._grandChampion?.wins ?? 1;
-        ctx.fillText(`${winN} WIN${winN === 1 ? "" : "S"}`, ax, y);
+        ctx.fillText("1 WIN", ax, y);
         y += winSize + gap * 0.9;
 
-        // Countdown / permanent label — light blue (cool contrast to warm win count above)
+        // Countdown / permanent label
         ctx.font = gf(700, cdSize);
-        ctx.fillStyle = isSpace ? '#B0A0E0' : '#38D5FF';
+        ctx.fillStyle = "#91A7C9";
         ctx.shadowBlur = 0;
         if (this._champPermanent) {
             ctx.fillText("FINAL RESULT  ·  NO NEXT ROUND", ax, y);
-        } else if (this._champHwRound) {
-            const mins  = Math.floor(this._champCountdownRemain / 60);
-            const secs  = this._champCountdownRemain % 60;
-            const cdStr = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-            ctx.fillText(`NEXT ROUND IN  ${cdStr}`, ax, y);
         } else {
             const mins  = Math.floor(this._champCountdownRemain / 60);
             const secs  = this._champCountdownRemain % 60;
