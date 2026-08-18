@@ -227,12 +227,32 @@ function resize() {
     const dpr = window.devicePixelRatio || 1;
     const logicalW = vp ? vp.width  : window.innerWidth;
     const logicalH = vp ? vp.height : window.innerHeight;
-    const physicalW = Math.round(logicalW * dpr);
-    const physicalH = Math.round(logicalH * dpr);
+
+    // ── Force strict 9:16 canvas within the available screen space ──────────
+    const TARGET_RATIO = 9 / 16;
+    let canvasW = logicalW;
+    let canvasH = logicalH;
+
+    if (canvasW / canvasH > TARGET_RATIO) {
+        // Screen is too wide — constrain by height, centre horizontally
+        canvasW = canvasH * TARGET_RATIO;
+    } else {
+        // Screen is too tall — constrain by width, centre vertically
+        canvasH = canvasW / TARGET_RATIO;
+    }
+
+    // Centre the canvas in the viewport
+    canvas.style.position = 'absolute';
+    canvas.style.left     = Math.round((logicalW - canvasW) / 2) + 'px';
+    canvas.style.top      = Math.round((logicalH - canvasH) / 2) + 'px';
+    canvas.style.width    = canvasW + 'px';
+    canvas.style.height   = canvasH + 'px';
+
+    const physicalW = Math.round(canvasW * dpr);
+    const physicalH = Math.round(canvasH * dpr);
     if (canvas.width === physicalW && canvas.height === physicalH) return;
     game.resize(physicalW, physicalH, dpr);
 }
-
 window.addEventListener('resize', resize);
 if (window.visualViewport) window.visualViewport.addEventListener('resize', resize);
 resize();

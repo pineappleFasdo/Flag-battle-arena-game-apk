@@ -7,6 +7,11 @@
     "androidScheme": "https",
     "allowNavigation": []
   },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
   "plugins": {
     "SplashScreen": {
       "launchShowDuration": 1500,
