@@ -30,8 +30,8 @@ body {
 
 canvas {
   display: block;
-  /* width/height are set programmatically by Game.resize() to enforce 9:16.
-     Do NOT override with 100% here — that would stretch it back to full screen. */
+  width: 100%;
+  height: 100%;
   will-change: transform;
 }
 
